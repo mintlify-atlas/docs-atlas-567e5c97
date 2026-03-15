@@ -1,0 +1,121 @@
+{
+  "projectType": "framework",
+  "projectName": "FrankerFaceZ",
+  "projectDescription": "A powerful Twitch enhancement suite with a modular plugin architecture, custom emotes, badges, and an extensive add-on API for third-party developers.",
+  "theme": "palm",
+  "primaryColor": "#fcad06",
+  "lightColor": "#eee6d2",
+  "darkColor": "#4c4c4c",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/module-system",
+              "concepts/settings",
+              "concepts/events"
+            ]
+          },
+          {
+            "group": "Add-On Development",
+            "pages": [
+              "addons/overview",
+              "addons/getting-started",
+              "addons/addon-class",
+              "addons/settings-api",
+              "addons/chat-integration",
+              "addons/emotes-badges"
+            ]
+          },
+          {
+            "group": "Features",
+            "pages": [
+              "features/emotes",
+              "features/badges",
+              "features/chat",
+              "features/player",
+              "features/theming"
+            ]
+          },
+          {
+            "group": "Contributing",
+            "pages": [
+              "contributing/development-setup",
+              "contributing/building",
+              "contributing/code-style"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core API",
+            "pages": [
+              "api/frankerfacez",
+              "api/module",
+              "api/addon"
+            ]
+          },
+          {
+            "group": "Utilities",
+            "pages": [
+              "api/utilities/events",
+              "api/utilities/settings",
+              "api/utilities/logging",
+              "api/utilities/dom",
+              "api/utilities/color",
+              "api/utilities/filtering"
+            ]
+          },
+          {
+            "group": "Modules",
+            "pages": [
+              "api/modules/chat",
+              "api/modules/emotes",
+              "api/modules/badges",
+              "api/modules/settings-manager"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Custom emotes with modifier support (animated, flipped, colored, etc.)",
+    "Custom chat badges from any source",
+    "Modular plugin/add-on system for third-party extensions",
+    "Robust settings system with profiles and contexts",
+    "Chat enhancements: tokenizers, rich content, link cards, viewer cards",
+    "Player improvements and theater mode",
+    "Theme and CSS customization",
+    "Real-time socket and PubSub integration",
+    "Internationalization (i18n) support",
+    "Experiment system for staged feature rollouts"
+  ],
+  "publicApiSurface": [
+    "FrankerFaceZ (global class, window.FrankerFaceZ)",
+    "Module (base class for all modules and add-ons)",
+    "Addon (subclass of Module for add-on root modules)",
+    "Addon.register(id, info) — registers an add-on with FFZ",
+    "Module.inject(name, module) — dependency injection",
+    "Module.on/off/emit — event emitter API",
+    "SettingsManager — settings definition and retrieval",
+    "EventEmitter (Detach, StopPropagation symbols)",
+    "FrankerFaceZ.utilities — namespace of utility modules",
+    "AddonManager.addAddon / hasAddon / enableAddon"
+  ]
+}
