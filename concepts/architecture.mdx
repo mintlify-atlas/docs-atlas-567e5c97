@@ -1,0 +1,177 @@
+---
+title: "Architecture Overview"
+description: "How FrankerFaceZ is structured: a tree of Modules rooted at the FrankerFaceZ instance, with core systems, lifecycle states, and a site integration layer."
+---
+
+FrankerFaceZ is organized as a **tree of Modules**. Every feature — emotes, chat, settings, add-ons, translations — is a `Module` subclass. The root of the tree is the `FrankerFaceZ` class itself, which also extends `Module`. All modules share a single flat registry keyed by dotted path (e.g. `settings`, `site.chat`, `addon.my-addon`).
+
+## Core systems
+
+The `FrankerFaceZ` constructor injects the following core modules directly onto itself:
+
+```typescript
+// src/main.ts
+this.inject('settings', SettingsManager);
+this.inject('experiments', ExperimentManager);
+this.inject('i18n', TranslationManager);
+this.inject('staging', StagingSelector);
+this.inject('load_tracker', LoadTracker);
+this.inject('socket', SocketClient);
+this.inject('pubsub', PubSubClient);
+this.inject('site', Site);
+this.inject('addons', AddonManager);
+```
+
+The table below describes the role of each injected module:
+
+| Module path | Class | Role |
+|---|---|---|
+| `settings` | `SettingsManager` | Typed key-value settings store, profiles, contexts, and UI generation |
+| `experiments` | `ExperimentManager` | A/B experiment assignment and overrides |
+| `i18n` | `TranslationManager` | Localization and translation string lookup |
+| `staging` | `StagingSelector` | Selects staging vs production API endpoints |
+| `load_tracker` | `LoadTracker` | Coordinates async startup ordering for chat and add-ons |
+| `socket` | `SocketClient` | WebSocket connection to the FFZ server for emote/badge data |
+| `pubsub` | `PubSubClient` | Twitch PubSub subscription management |
+| `site` | `Site` | Entry point for the Twitch site integration layer |
+| `addons` | `AddonManager` | Discovery, loading, enabling, and disabling of third-party add-ons |
+
+In addition to the injected modules, `VueModule` is registered (but not injected) under the key `vue`, making Vue available to modules that declare it as a dependency.
+
+## Module states
+
+Every module tracks two independent state machines: an **enable state** and a **load state**.
+
+### Enable state (`State`)
+
+Defined in `src/utilities/module.ts`:
+
+```typescript
+export enum State {
+    /** The module is currently disabled. */
+    Disabled,    // 0
+    /**
+     * The module is in the process of being enabled. It may be waiting for
+     * its dependencies to become available, or it may be waiting for its
+     * own onEnable method to return.
+     */
+    Enabling,    // 1
+    /** The module is currently enabled. */
+    Enabled,     // 2
+    /**
+     * The module is in the process of being disabled. It may be waiting for
+     * other modules that depend on it to be disabled, or it may be waiting
+     * for its own onDisable method to return.
+     */
+    Disabling    // 3
+}
+```
+
+### Load state (`LoadState`)
+
+```typescript
+export enum LoadState {
+    /** The module is currently unloaded. */
+    Unloaded,   // 0
+    /**
+     * The module is in the process of loading. It may be waiting for its
+     * load dependencies to become available, or it may be waiting for its
+     * own onLoad method to return.
+     */
+    Loading,    // 1
+    /** The module is currently loaded. */
+    Loaded,     // 2
+    /**
+     * The module is in the process of unloading. It may be waiting for other
+     * modules that depend on it to be disabled, or it may be waiting for its
+     * own onUnload method to return.
+     */
+    Unloading   // 3
+}
+```
+
+<Info>
+  A module with no `onLoad` method and no `load_requires` is considered `Loaded` immediately upon construction. A module with no `onEnable` method **and** that loads immediately is considered `Enabled` immediately.
+</Info>
+
+## Initialization flow
+
+<Steps>
+  <Step title="FrankerFaceZ constructor runs">
+    The `FrankerFaceZ` instance is created and stored on `window.ffz`. The constructor sets the instance state to `Disabled` and registers itself as the root module under the key `core`.
+
+    ```typescript
+    // src/main.ts
+    (this as any).__state = State.Disabled;
+    (this as any).__modules.core = this;
+    ```
+  </Step>
+
+  <Step title="Core modules are injected">
+    `inject()` calls instantiate and register `SettingsManager`, `ExperimentManager`, `TranslationManager`, `StagingSelector`, `LoadTracker`, `SocketClient`, `PubSubClient`, `Site`, and `AddonManager`. Each becomes a property on the `FrankerFaceZ` instance and is added to the shared module registry.
+  </Step>
+
+  <Step title="Feature modules are discovered">
+    `discoverModules()` uses a webpack `require.context` to scan `src/modules/` and calls `loadFromContext()` to register every exported `Module` subclass found there.
+
+    ```typescript
+    // src/main.ts
+    async discoverModules() {
+        const ctx = await require.context(
+            'src/modules',
+            true,
+            /(?:^(?:\.\/?)[^/]+|index)\.[jt]sx?$/
+        );
+        const modules = this.loadFromContext(ctx, this.core_log);
+        this.core_log.info(`Loaded descriptions of ${Object.keys(modules).length} modules.`);
+    }
+    ```
+  </Step>
+
+  <Step title="FrankerFaceZ is enabled">
+    `this.enable()` is called on the root. This triggers `onEnable()` (if defined) and recursively enables all required dependencies.
+  </Step>
+
+  <Step title="Initial modules are enabled">
+    `enableInitialModules()` iterates every registered module and calls `enable()` on any module with `should_enable = true`.
+
+    ```typescript
+    async enableInitialModules() {
+        const promises = [];
+        for(const module of Object.values((this as any).__modules)) {
+            if ( module instanceof Module && module.should_enable )
+                promises.push(module.enable());
+        }
+        return Promise.all(promises);
+    }
+    ```
+  </Step>
+</Steps>
+
+## Site integration layer
+
+The `site` module (mounted at path `site`) is the entry point for all Twitch-specific behaviour. For the main Twitch site, this is implemented in `src/sites/twitch-twilight/`. The site module is responsible for:
+
+- Detecting the current Twitch route and updating the settings context
+- Hooking into React component trees via Vue-based component overrides
+- Mounting sub-modules such as `site.chat`, `site.player`, `site.channel`, and `site.menu_button`
+
+Because `Site` is injected and enabled like any other module, the site integration participates in the same dependency and lifecycle system as every other part of FFZ.
+
+## Module tree
+
+At runtime you can inspect the full module registry via the browser console:
+
+```javascript
+// All registered modules
+Object.keys(window.ffz.__modules);
+
+// Resolve a module by path
+window.ffz.resolve('settings');
+window.ffz.resolve('site.chat');
+window.ffz.resolve('addon.my-addon');
+```
+
+<Note>
+  `window.ffz` is the live `FrankerFaceZ` instance. `window.FrankerFaceZ` is the class itself, including static utilities on `FrankerFaceZ.utilities`.
+</Note>

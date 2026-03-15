@@ -1,0 +1,231 @@
+---
+title: "DOM Utility"
+description: "Typed DOM element creation, managed CSS injection, and a collection of browser DOM helpers."
+---
+
+
+## Overview
+
+The DOM utility module provides helpers for creating and manipulating browser DOM nodes, injecting CSS, and working with React render trees.
+
+```typescript
+import { createElement, ManagedStyle, setChildren, sanitize } from 'utilities/dom';
+// or, via the add-on global:
+const { createElement, ManagedStyle } = FrankerFaceZ.utilities.dom;
+```
+
+---
+
+## `createElement(tag, props?, ...children)`
+
+Create a native DOM element using the same calling convention as React's `createElement`. Because of this, FFZ JSX (via `/** @jsxRuntime classic */ /** @jsx createElement */`) produces real DOM nodes that work inside and outside React component trees.
+
+<ParamField path="tag" type="string" required>
+  The HTML or SVG tag name to create (e.g. `"div"`, `"span"`, `"svg"`). SVG elements are created with the correct namespace automatically.
+</ParamField>
+
+<ParamField path="props" type="object | string">
+  An object of properties and attributes, or a plain string that is used as the element's `class`. Supported special keys:
+
+  - `className` → sets the `class` attribute
+  - `style` → accepts a string or a `CSSStyleDeclaration`-compatible object
+  - `dataset` → sets `data-*` attributes via `element.dataset`
+  - `dangerouslySetInnerHTML` → `{ __html: string }` for raw HTML (React compatibility)
+  - `on*` → wires up event listeners via `addEventListener`
+  - All standard HTML attributes and ARIA attributes are set via `setAttribute`
+  - Unrecognised keys are assigned directly as JS properties on the element
+</ParamField>
+
+<ParamField path="children" type="DomFragment[]">
+  Zero or more children. Each child may be a `Node`, a string, a number, `null`, or a nested array.
+</ParamField>
+
+<ResponseField name="returns" type="HTMLElement">
+  The constructed DOM element. Return type is narrowed to the specific `HTMLElementTagNameMap` entry when the tag is a string literal.
+</ResponseField>
+
+```typescript
+import { createElement } from 'utilities/dom';
+
+// Plain usage
+const btn = createElement('button', {
+  className: 'ffz--action-button',
+  onclick: () => this.doAction(),
+}, 'Click me');
+
+// With JSX (add @jsx pragma to the file)
+/** @jsxRuntime classic */
+/** @jsx createElement */
+
+const el = (
+  <span className="ffz--icon-holder tw-mg-r-05">
+    <figure className="ffz-i-zreknarf" />
+  </span>
+);
+```
+
+<Note>
+  Function components are **not** supported. `createElement` only handles intrinsic (HTML/SVG) tag names.
+</Note>
+
+---
+
+## `setChildren(element, children, no_sanitize?, no_empty?)`
+
+Set the children of an existing element. Used internally by `createElement`.
+
+<ParamField path="element" type="HTMLElement" required>
+  The element to populate.
+</ParamField>
+
+<ParamField path="children" type="DomFragment" required>
+  The children to append — a `Node`, string, number, or array thereof.
+</ParamField>
+
+<ParamField path="no_sanitize" type="boolean">
+  Deprecated and no longer functional. String values are always treated as text nodes.
+</ParamField>
+
+<ParamField path="no_empty" type="boolean">
+  When `true`, existing children are preserved and new children are appended. Defaults to `false` (replaces all existing children).
+</ParamField>
+
+---
+
+## `sanitize(text)`
+
+Escape all special HTML characters in a string, returning a safe HTML-encoded version. Uses a hidden `<span>` element and the browser's native serializer.
+
+```typescript
+sanitize('<script>alert(1)</script>');
+// → '&lt;script&gt;alert(1)&lt;/script&gt;'
+```
+
+---
+
+## ManagedStyle
+
+`ManagedStyle` injects and manages a `<style>` element in `document.head`. CSS is stored as named blocks that can be individually set, updated, or removed without affecting other blocks.
+
+```typescript
+const style = new ManagedStyle();
+```
+
+### `set(key, value, force?)`
+
+Insert or update a named CSS block.
+
+<ParamField path="key" type="string" required>
+  The unique name for this CSS block.
+</ParamField>
+
+<ParamField path="value" type="string" required>
+  The CSS text to inject.
+</ParamField>
+
+<ParamField path="force" type="boolean">
+  When `true`, the block is updated even if the text is unchanged. Defaults to `false`.
+</ParamField>
+
+```typescript
+style.set('badges', '.ffz-badge { width: 18px; height: 18px; }');
+style.set('colors', '.ffz--user-color { color: var(--ffz-user-color); }');
+```
+
+### `get(key)`
+
+Return the current CSS text for the named block, or `undefined` if not set.
+
+### `has(key)`
+
+Return `true` if a block with the given key exists.
+
+### `delete(key)`
+
+Remove a named CSS block from the style element.
+
+### `clear()`
+
+Remove all CSS blocks, leaving the `<style>` element empty.
+
+### `destroy()`
+
+Remove the `<style>` element from the document entirely and release all internal references.
+
+```typescript
+onDisable() {
+  this.style.destroy();
+}
+```
+
+---
+
+## ClickOutside
+
+A helper class that registers a document-level click listener and fires a callback when a click occurs outside a given element.
+
+```typescript
+import { ClickOutside } from 'utilities/dom';
+
+const outside = new ClickOutside(this.el, () => this.close());
+// Later:
+outside.destroy();
+```
+
+### `destroy()`
+
+Remove the document-level click listener and release all references.
+
+---
+
+## `findReactFragment(frag, criteria, depth?, current?, visited?)`
+
+Recursively scan a React render tree (via `props.children`) looking for a node that satisfies `criteria`.
+
+<ParamField path="frag" type="TNode" required>
+  The starting node of the React tree.
+</ParamField>
+
+<ParamField path="criteria" type="(node: TNode) => boolean" required>
+  A predicate that returns `true` when the desired node is found.
+</ParamField>
+
+<ParamField path="depth" type="number">
+  Maximum traversal depth. Defaults to `25`.
+</ParamField>
+
+<ResponseField name="returns" type="TNode | null">
+  The first matching node, or `null` if none was found within the depth limit.
+</ResponseField>
+
+---
+
+## Other Helpers
+
+### `on(obj, type, listener, options?)`
+
+Alias for `obj.addEventListener(type, listener, options)`.
+
+### `off(obj, type, listener, options?)`
+
+Alias for `obj.removeEventListener(type, listener, options)`.
+
+### `hasSharedParent(element, other, selector?)`
+
+Determine if `element` and `other` share an ancestor. Optionally restrict the ancestor search to elements matching `selector`.
+
+### `openFile(contentType, multiple)`
+
+Open a native file picker dialog and return the selected `File` or `File[]`. Returns a `Promise` that resolves when the user confirms or dismisses the dialog.
+
+### `readFile(file, encoding?)`
+
+Read the text contents of a `Blob` or `File` asynchronously. Returns a `Promise<string>`. Defaults to UTF-8 encoding.
+
+### `highlightJson(object, pretty?, depth?, max_depth?)`
+
+Render a JSON-serialisable object as an HTML string with syntax highlighting CSS classes.
+
+<Warning>
+  `highlightJson` is deprecated and its signature is expected to change. Do not depend on it in new code.
+</Warning>

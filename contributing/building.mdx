@@ -1,0 +1,119 @@
+---
+title: "Building"
+description: "Build FrankerFaceZ for production, development, or as a browser extension."
+---
+
+## Build Scripts
+
+All build commands are run with `pnpm`. The table below summarises every available script:
+
+| Command | Description |
+|---|---|
+| `pnpm build` | Production build (alias for `build:prod`) |
+| `pnpm build:dev` | Development build with source maps |
+| `pnpm build:ext` | Production build targeting the browser extension |
+| `pnpm build:stats` | Production build that writes webpack stats to `stats.json` |
+| `pnpm build:types` | Generate TypeScript declaration files into `typedist/` |
+| `pnpm build:docs` | Generate API reference docs with TypeDoc |
+| `pnpm clean` | Delete the `dist/` output directory |
+
+## Build Modes
+
+<Tabs>
+  <Tab title="Production">
+    Produces minified, optimised output. Assets are named `script.min.js` and the public path is set to `https://cdn2.frankerfacez.com/static/`.
+
+    ```bash
+    pnpm build
+    ```
+
+    Internally this runs:
+
+    ```bash
+    cross-env NODE_ENV=production webpack build
+    ```
+  </Tab>
+
+  <Tab title="Development">
+    Produces an unminified build with inline source maps. Assets are named `script.js`.
+
+    ```bash
+    pnpm build:dev
+    ```
+
+    Internally this runs:
+
+    ```bash
+    cross-env NODE_ENV=development webpack build
+    ```
+  </Tab>
+
+  <Tab title="Extension">
+    Builds the browser extension variant. Sets the `FFZ_EXTENSION` environment variable, which enables the `worker` entry point and changes the entry script to `src/entry_ext.js`. The public path is set to an empty string so all paths are relative.
+
+    ```bash
+    pnpm build:ext
+    ```
+
+    Internally this runs:
+
+    ```bash
+    cross-env NODE_ENV=production FFZ_EXTENSION=true webpack build
+    ```
+  </Tab>
+
+  <Tab title="Stats">
+    Produces a production build and writes the full webpack stats object to `stats.json` in the project root. Useful for bundle analysis.
+
+    ```bash
+    pnpm build:stats
+    ```
+
+    Internally this runs:
+
+    ```bash
+    cross-env NODE_ENV=production webpack build --json > stats.json
+    ```
+  </Tab>
+</Tabs>
+
+## Extension vs. Main Client
+
+The webpack configuration detects the `FFZ_EXTENSION` environment variable to switch between two build targets:
+
+| Aspect | Main client | Extension |
+|---|---|---|
+| Entry script | `src/entry.js` | `src/entry_ext.js` |
+| Additional entry point | — | `src/worker.ts` |
+| Public path | `https://cdn2.frankerfacez.com/static/` | *(empty — relative paths)* |
+| Output filename | `script.min.js` (prod) / `script.js` (dev) | `script.js` |
+
+## TypeScript Type Generation
+
+Type declarations for consumers of the FrankerFaceZ API are generated with `tsc` and then post-processed:
+
+```bash
+pnpm build:types
+```
+
+This command runs:
+
+```bash
+cross-env tsc --declaration --emitDeclarationOnly --outDir typedist && node bin/build_types
+```
+
+Declaration files are emitted to the `typedist/` directory. The `bin/build_types` script performs any additional post-processing steps.
+
+<Info>
+  The TypeScript compiler is configured to target **ES2020** with strict mode enabled. See `tsconfig.json` for the full compiler options.
+</Info>
+
+## Cleaning the Output
+
+To remove all build artifacts and start fresh:
+
+```bash
+pnpm clean
+```
+
+This deletes the `dist/` directory using `rimraf`.

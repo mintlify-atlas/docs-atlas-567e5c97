@@ -1,0 +1,188 @@
+---
+title: "FrankerFaceZ"
+description: "The root singleton class that boots and owns all FrankerFaceZ modules."
+---
+
+`FrankerFaceZ` is the top-level class that extends `Module`. Exactly one instance is created at page load, assigned to `window.ffz`, and stored as `FrankerFaceZ.instance`.
+
+```typescript
+import Module, { State } from 'utilities/module';
+
+class FrankerFaceZ extends Module { ... }
+
+window.FrankerFaceZ = FrankerFaceZ;
+window.ffz = new FrankerFaceZ();
+```
+
+## Accessing the singleton
+
+```typescript
+// From anywhere on the page
+const ffz = window.ffz;
+
+// Via the static getter
+const ffz = FrankerFaceZ.get();
+
+// From inside an Addon or Module
+const ffz = window.FrankerFaceZ.get();
+```
+
+<Note>
+  `FrankerFaceZ.get()` and `window.ffz` always refer to the same object. Prefer `window.FrankerFaceZ.get()` in add-on code so the reference survives any early-load timing issues.
+</Note>
+
+## Static properties
+
+<ResponseField name="FrankerFaceZ.instance" type="FrankerFaceZ">
+  The singleton instance. Set in the constructor before any async work begins.
+</ResponseField>
+
+<ResponseField name="FrankerFaceZ.version_info" type="ClientVersion">
+  Frozen object describing the running build.
+
+  <Expandable title="ClientVersion fields">
+    <ResponseField name="major" type="number">Major version number.</ResponseField>
+    <ResponseField name="minor" type="number">Minor version number.</ResponseField>
+    <ResponseField name="revision" type="number">Patch / revision number.</ResponseField>
+    <ResponseField name="extra" type="number">Pre-release identifier, if any.</ResponseField>
+    <ResponseField name="commit" type="string | null">Git commit hash of the build.</ResponseField>
+    <ResponseField name="build" type="string">Build identifier string.</ResponseField>
+    <ResponseField name="hash" type="string">Webpack compilation hash.</ResponseField>
+  </Expandable>
+
+  Calling `.toString()` on `version_info` returns a human-readable string such as `4.42.0` or `4.42.0-dev`.
+</ResponseField>
+
+<ResponseField name="FrankerFaceZ.Logger" type="typeof Logger">
+  Reference to the `Logger` class from `utilities/logging`. Exposed here so add-ons can construct loggers without a direct import.
+</ResponseField>
+
+<ResponseField name="FrankerFaceZ.utilities" type="object">
+  Namespace object containing every utility module bundled with FrankerFaceZ. See [Utility modules](#utility-modules) below.
+</ResponseField>
+
+## Static methods
+
+### `FrankerFaceZ.get()`
+
+```typescript
+static get(): FrankerFaceZ
+```
+
+Returns `FrankerFaceZ.instance`. This is the canonical way to retrieve the singleton from outside the module tree.
+
+## Instance properties
+
+<ResponseField name="host" type="string">
+  The host site this build targets. Always `'twitch'` in the standard build.
+</ResponseField>
+
+<ResponseField name="flavor" type="string">
+  The deployment flavor. The standard page extension uses `'main'`. Other possible values are `'clips'` and `'player'`.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  The module path name. Always `'frankerfacez'` for the root instance.
+</ResponseField>
+
+<ResponseField name="core_log" type="Logger">
+  A `Logger` instance scoped to `'core'`. Used internally for initialization messages and module discovery output.
+</ResponseField>
+
+## Instance methods
+
+### `generateLog()`
+
+```typescript
+async generateLog(): Promise<string>
+```
+
+Iterates over every registered module, calls each module's own `generateLog()` method (if it defines one), and assembles the results into a single formatted string. Initialization log messages captured before the extension finished booting are prepended as an `initialization` section.
+
+Each section is separated by a dashed rule:
+
+```
+initialization
+-------------------------------------------------------------------------------
+[0:00:01] info | core: Loaded descriptions of 42 modules.
+
+settings
+-------------------------------------------------------------------------------
+{ ... }
+```
+
+### `discoverModules()`
+
+```typescript
+async discoverModules(): Promise<void>
+```
+
+Uses a webpack `require.context` to scan `src/modules/` for all top-level module files, then calls `loadFromContext()` to register each discovered module. Called automatically during construction before `enable()` is invoked.
+
+### `enableInitialModules()`
+
+```typescript
+async enableInitialModules(): Promise<void>
+```
+
+Iterates over all registered modules and calls `enable()` on any that have `should_enable` set to `true`. Returns a `Promise` that resolves when every initial module has finished enabling.
+
+## Global window properties
+
+| Property | Type | Description |
+|---|---|---|
+| `window.FrankerFaceZ` | `typeof FrankerFaceZ` | The class constructor, usable to call static methods. |
+| `window.ffz` | `FrankerFaceZ` | The live singleton instance. |
+
+## Startup sequence
+
+The constructor runs the following steps synchronously and then continues asynchronously:
+
+<Steps>
+  <Step title="Assign singleton">
+    `FrankerFaceZ.instance = this` and `window.ffz = this` are set.
+  </Step>
+  <Step title="Install extension port">
+    If the page body has a `data-ffz-extension` attribute, an inter-process communication port is installed.
+  </Step>
+  <Step title="Inject core modules">
+    `settings`, `experiments`, `i18n`, `staging`, `load_tracker`, `socket`, `pubsub`, `site`, and `addons` are injected. `vue` is registered without being required.
+  </Step>
+  <Step title="Discover modules">
+    `discoverModules()` scans `src/modules/` via webpack context and registers all found modules.
+  </Step>
+  <Step title="Enable root">
+    `enable()` transitions the `FrankerFaceZ` module itself to `State.Enabled`, which cascades to all `requires` dependencies.
+  </Step>
+  <Step title="Enable initial modules">
+    `enableInitialModules()` calls `enable()` on every module that has `should_enable = true`.
+  </Step>
+</Steps>
+
+## Utility modules
+
+`FrankerFaceZ.utilities` exposes every utility namespace as a property. These are the raw ES module namespaces — all named exports are available.
+
+| Key | Source module | Purpose |
+|---|---|---|
+| `addon` | `utilities/addon` | `Addon` base class and helpers. |
+| `blobs` | `utilities/blobs` | Blob URL creation and management. |
+| `color` | `utilities/color` | Color parsing, manipulation, and conversion. |
+| `constants` | `utilities/constants` | Build-time constants such as `DEBUG`. |
+| `dialog` | `utilities/dialog` | Modal dialog utilities. |
+| `dom` | `utilities/dom` | DOM manipulation helpers. |
+| `events` | `utilities/events` | `EventEmitter` base class. |
+| `fontAwesome` | `utilities/font-awesome` | Font Awesome icon helpers. |
+| `graphql` | `utilities/graphql` | GraphQL query helpers for Twitch's Apollo client. |
+| `logging` | `utilities/logging` | `Logger` class. |
+| `module` | `utilities/module` | `Module`, `State`, `LoadState`, and error classes. |
+| `object` | `utilities/object` | Object and array utility functions. |
+| `time` | `utilities/time` | Time formatting and duration helpers. |
+| `tooltip` | `utilities/tooltip` | Tooltip creation utilities. |
+| `i18n` | `utilities/translation-core` | Core i18n / ICU translation engine. |
+| `filtering` | `utilities/filtering` | Filter rule evaluation engine. |
+
+```typescript
+// Access a utility from add-on code
+const { Color } = window.FrankerFaceZ.utilities.color;
+```

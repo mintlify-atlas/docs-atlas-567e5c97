@@ -1,0 +1,171 @@
+---
+title: "Getting Started with Add-On Development"
+description: "Step-by-step guide to creating, registering, and loading your first FrankerFaceZ add-on."
+---
+
+This guide walks you through creating a minimal FFZ add-on, running a local development server, and verifying that FFZ loads your add-on correctly.
+
+## Prerequisites
+
+- Node.js 18+ and a package manager (npm / yarn / pnpm)
+- A browser with FrankerFaceZ installed
+- Familiarity with TypeScript or modern JavaScript
+
+<Steps>
+  <Step title="Set up a project">
+    Create a new directory and initialize a package:
+
+    ```bash
+    mkdir my-ffz-addon && cd my-ffz-addon
+    npm init -y
+    npm install --save-dev webpack webpack-cli typescript ts-loader
+    ```
+
+    The official add-ons repository uses webpack with a standard configuration. Your entry point must call `Addon.register()` after the class is defined.
+  </Step>
+
+  <Step title="Create your Addon class">
+    Create `src/index.ts` (or `src/index.js`). Import `Addon` from the FFZ module system and subclass it:
+
+    ```typescript
+    import { Addon } from 'utilities/addon';
+    import type { AddonInfo } from 'utilities/types';
+
+    export default class MyAddon extends Addon {
+
+      static info: AddonInfo = {
+        id: 'my-addon',
+        name: 'My Add-On',
+        author: 'YourName',
+        description: 'A minimal example add-on.',
+        version: '1.0.0',
+        // created / updated are filled by the add-ons server manifest;
+        // they are optional when registering manually.
+        dev: false,
+        external: false,
+        required_by: [],
+        requires: [],
+        targets: ['main'],
+        created: new Date('2024-01-01'),
+      };
+
+      onEnable() {
+        this.log.info('My add-on is enabled!');
+
+        this.settings.add('my-addon.example-toggle', {
+          default: false,
+          ui: {
+            path: 'Add-Ons > My Add-On >> General',
+            title: 'Enable Example Feature',
+            component: 'setting-check-box',
+          },
+        });
+      }
+
+      onDisable() {
+        this.log.info('My add-on is disabled.');
+      }
+    }
+
+    // Register as soon as the class is available.
+    MyAddon.register();
+    ```
+
+    <Note>
+      `this.i18n` and `this.settings` are automatically injected by the `Addon` constructor — you do not need to call `this.inject()` for them yourself.
+    </Note>
+  </Step>
+
+  <Step title="Start the development server">
+    FFZ looks for a local add-on manifest at `https://localhost:8001/script/addons.json`. Your development server must serve:
+
+    - `/script/addons.json` — a JSON array of addon manifests
+    - `/script/addons/<your-id>/script.js` — the compiled bundle
+
+    A minimal manifest entry:
+
+    ```json
+    [
+      {
+        "id": "my-addon",
+        "name": "My Add-On",
+        "author": "YourName",
+        "description": "A minimal example add-on.",
+        "version": "1.0.0",
+        "targets": ["main"]
+      }
+    ]
+    ```
+
+    <Warning>
+      The server must use HTTPS with a locally trusted certificate because the page is loaded over HTTPS. Use a tool such as `mkcert` and configure your server accordingly.
+    </Warning>
+  </Step>
+
+  <Step title="Enable the development server in FFZ">
+    Open the FFZ settings panel (`Add-Ons >> Development`) and enable **Use Local Development Server**. This corresponds to the `addons.dev.server` setting:
+
+    ```typescript
+    // From src/addons.ts — this is how FFZ registers the setting:
+    this.settings.add('addons.dev.server', {
+      default: false,
+      ui: {
+        path: 'Add-Ons >> Development',
+        title: 'Use Local Development Server',
+        description: 'Attempt to load add-ons from local development server on port 8001.',
+        component: 'setting-check-box'
+      }
+    });
+    ```
+
+    After enabling the setting, reload the Twitch page. FFZ will fetch your manifest and list your add-on in the Add-Ons panel.
+  </Step>
+
+  <Step title="Enable your add-on">
+    Open the FFZ settings panel and navigate to **Add-Ons**. Your add-on should appear with a **[dev]** label. Click **Enable** to activate it.
+
+    You can confirm the add-on loaded by opening the browser console — you should see your `this.log.info` message.
+  </Step>
+
+  <Step title="Iterate">
+    Edit your source, rebuild the bundle, and reload the page. If you implement `onDisable()` the add-on manager can reload the add-on in place using **Reload** without a full page refresh.
+
+    ```typescript
+    onDisable() {
+      // Clean up anything your onEnable() set up.
+    }
+    ```
+  </Step>
+</Steps>
+
+## How `Addon.register()` Works
+
+Under the hood `Addon.register()` does three things:
+
+1. Resolves an ID from the argument, from `static info.id`, or by converting the class name to snake_case.
+2. Calls `addons.addAddon(info)` to store the manifest.
+3. Calls `ffz.register('addon.<id>', this)` to mount the class as a module at the `addon.<id>` path in the module tree.
+
+The `AddonManager` waits for the `:registered` event on that path before calling `enable()`. This sequence happens automatically — you only need to call `MyAddon.register()` once, at module evaluation time.
+
+```typescript
+// From src/utilities/addon.ts
+static register(id?: string | AddonInfo, info?: AddonInfo, version?: string) {
+  // ... resolve id and info ...
+  const ffz = window.FrankerFaceZ.get(),
+    addons = ffz?.addons as AddonManager;
+
+  if ( addons ) {
+    if ( info ) {
+      info.id = id;
+      addons.addAddon(info);
+    } else if ( ! addons.hasAddon(id) )
+      addons.addAddon({ id });
+
+    if ( version )
+      addons.setVersion(id, version);
+  }
+
+  ffz.register(`addon.${id}`, this);
+}
+```

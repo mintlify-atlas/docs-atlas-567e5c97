@@ -1,0 +1,187 @@
+---
+title: "Filtering Utility"
+description: "A composable filter rule system used for profile context matching, chat filtering, badge filtering, and more."
+---
+
+
+## Overview
+
+The filtering utility provides a typed, composable rule evaluation system. A **filter type** defines how to compile a single rule into a test function; `createTester` compiles an ordered list of rules into a single fast combined tester function.
+
+Filters power several FFZ features: settings profile context conditions, chat message filters, badge visibility rules, and notification filters.
+
+```typescript
+import { createTester, FilterType, FilterData } from 'utilities/filtering';
+// or, via the add-on global:
+const { createTester } = FrankerFaceZ.utilities.filtering;
+```
+
+---
+
+## Core Types
+
+### `FilterType<TConfig, TContext>`
+
+Describes a single kind of filter rule — how its configuration UI is built, how it compiles to a test function, and metadata about how it can be composed.
+
+```typescript
+export type FilterType<TConfig, TContext> = {
+  /**
+   * Compile a rule configuration into a test function.
+   * Return null to skip this rule (e.g. when the config renders it a no-op).
+   */
+  createTest: (
+    config: TConfig,
+    filter_types: FilterTypeMap<TContext>,
+    rebuild?: () => void
+  ) => ((ctx: TContext) => boolean) | null;
+
+  /** The default configuration value for this filter type. */
+  default: TConfig | (() => TConfig);
+
+  /** Display title shown in the filter editor UI. */
+  title: string;
+
+  /** Optional i18n key for the title. */
+  i18n?: string | null;
+
+  /** When true, the editor UI should render in a tall/expanded layout. */
+  tall?: boolean;
+
+  /** Maximum number of child rules, if this filter type wraps sub-rules. */
+  maxRules?: number;
+
+  /** Whether this filter type may contain child rules. */
+  childRules?: boolean;
+
+  /** Async factory for the Vue editor component. */
+  editor?: () => Promise<any> | any;
+};
+```
+
+<ResponseField name="createTest" type="function" required>
+  Compiles the stored rule configuration into a `(ctx: TContext) => boolean` predicate. Return `null` to skip generating a test (the rule will have no effect).
+</ResponseField>
+
+<ResponseField name="default" type="TConfig | (() => TConfig)" required>
+  The initial configuration value shown when a user adds this filter type. Can be a value or a factory function.
+</ResponseField>
+
+<ResponseField name="title" type="string" required>
+  Human-readable name shown in the filter editor.
+</ResponseField>
+
+---
+
+### `FilterData`
+
+The serialised form of a single rule, as stored in profiles and settings.
+
+```typescript
+export type FilterData = {
+  id?: string;   // Optional stable identifier for this rule instance
+  type: string;  // Key into the FilterType map
+  data: any;     // The TConfig value for this rule
+};
+```
+
+---
+
+## `createTester(rules, filter_types, inverted?, or?, rebuild?)`
+
+Compile an array of `FilterData` rules into a single optimised test function.
+
+<ParamField path="rules" type="FilterData[] | null | undefined" required>
+  The ordered list of rules to compile. If `null`, `undefined`, or an empty array, the returned function always returns `true` (or `false` when `inverted`).
+</ParamField>
+
+<ParamField path="filter_types" type="FilterTypeMap<TContext>" required>
+  A map from filter type keys to their `FilterType` objects. Unknown rule types default to a test that always returns `false`.
+</ParamField>
+
+<ParamField path="inverted" type="boolean">
+  When `true`, the combined result is negated. Defaults to `false`.
+</ParamField>
+
+<ParamField path="or" type="boolean">
+  When `true`, rules are combined with logical OR instead of AND. Defaults to `false` (AND).
+</ParamField>
+
+<ParamField path="rebuild" type="() => void">
+  An optional callback that a filter type can call to signal that the tester needs to be recompiled (e.g. because an async dependency loaded).
+</ParamField>
+
+<ResponseField name="returns" type="(ctx: TContext) => boolean">
+  A compiled tester function. For two or more rules, this is generated via `new Function` for performance. Pass the current context object to evaluate the rules.
+</ResponseField>
+
+```typescript
+import { createTester, FilterData } from 'utilities/filtering';
+
+const rules: FilterData[] = [
+  { type: 'channel', data: { channel: 'lirik' } },
+  { type: 'moderator', data: true },
+];
+
+// Returns true only when BOTH rules pass
+const test = createTester(rules, this.settings.filters);
+
+console.log(test({ channel: 'lirik', moderator: true }));  // true
+console.log(test({ channel: 'lirik', moderator: false })); // false
+```
+
+<Tip>
+  Compiled testers are cheap to call but not cheap to create — cache the result where possible and only rebuild when the rule set changes.
+</Tip>
+
+---
+
+## Defining a Custom Filter Type
+
+Register a new filter type with `SettingsManager.addFilter`:
+
+```typescript
+this.settings.addFilter('my-filter', {
+  title: 'My Custom Filter',
+  i18n: 'my-addon.filter.my_filter',
+
+  default: { value: '' },
+
+  // Optional: lazy-load the Vue editor component
+  editor: () => import('./components/my-filter-editor.vue'),
+
+  createTest(config, filter_types, rebuild) {
+    const { value } = config;
+
+    // Return null to skip this rule when it has no effect
+    if (!value) return null;
+
+    // Return the compiled test function
+    return (ctx) => ctx.someProperty === value;
+  },
+});
+```
+
+<Note>
+  The `filter_types` argument passed to `createTest` is the same map you would pass to `createTester`. This lets filter types that wrap sub-rules (like boolean AND/OR groups) recurse into `createTester` themselves.
+</Note>
+
+---
+
+## Built-in Filter Types
+
+FFZ ships several built-in filter types used for settings profile context matching:
+
+| Key | Description |
+|---|---|
+| `channel` | Matches a specific channel name or ID. |
+| `category` | Matches a stream category/game. |
+| `moderator` | Passes when the user is a moderator. |
+| `route` | Matches the current page route. |
+| `time` | Matches a time-of-day range. |
+| `monitor` | Matches display/monitor properties. |
+| `group` | Boolean AND/OR container for sub-rules. |
+
+<Info>
+  The full list of built-in filter types is defined in `src/settings/filters.ts`. Each one exports a `FilterType` object conforming to the interface above.
+</Info>

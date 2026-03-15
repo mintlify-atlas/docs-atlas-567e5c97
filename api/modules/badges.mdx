@@ -1,0 +1,254 @@
+---
+title: "Badges Module"
+description: "The badges sub-module that manages custom FFZ badges, bulk user assignments, and Twitch badge CSS overrides."
+---
+
+The `Badges` module registers custom badges, assigns them to users, and generates the CSS needed to render them. Add-ons use it at path `'chat.badges'`.
+
+```javascript
+// Accessing the badges module from an add-on
+const badges = this.resolve('chat.badges');
+```
+
+## Module path
+
+```
+chat.badges
+```
+
+Source: `src/modules/chat/badges.jsx`
+
+---
+
+## Registering badges
+
+### `loadBadgeData(badge_id, data)`
+
+Registers or updates a custom badge definition. Pass `null` as `data` to remove the badge.
+
+```javascript
+badges.loadBadgeData('my-addon:supporter', {
+  // Required
+  title: 'My Add-on Supporter',
+  slot: 30,           // Rendering position (lower = further left)
+
+  // Images
+  urls: {
+    1: 'https://cdn.example.com/badge/1x.png',
+    2: 'https://cdn.example.com/badge/2x.png',
+    4: 'https://cdn.example.com/badge/4x.png',
+  },
+
+  // Appearance
+  color: '#9146FF',
+
+  // Behavior
+  addon: 'my-addon',  // set automatically by the add-on proxy
+
+  // Optional click action
+  click_url: 'https://www.example.com/support',
+  // or
+  click_handler(user_id, user_login, room_id, room_login, badge_data, event) {
+    return 'https://www.example.com/profile/' + user_login;
+  }
+});
+```
+
+<ParamField path="badge_id" type="string" required>
+  Unique identifier for this badge. Should contain your add-on ID (e.g. `'my-addon:vip'`).
+</ParamField>
+<ParamField path="data" type="BadgeDefinition | null" required>
+  <Expandable title="BadgeDefinition fields">
+    <ResponseField name="title" type="string" required>
+      Displayed in the badge tooltip.
+    </ResponseField>
+    <ResponseField name="slot" type="number" required>
+      Position in the badge row. Lower values appear further left. FFZ's built-in badges occupy slots `−2` through `25`. Use values above `25` to avoid collision with official badges.
+    </ResponseField>
+    <ResponseField name="urls" type="{ 1: string, 2?: string, 4?: string }">
+      Image URLs at 1×, 2×, and 4× scale. Provide at least the 1× URL.
+    </ResponseField>
+    <ResponseField name="image" type="string">
+      Alternative to `urls`. A single image URL (used if `urls` is not set).
+    </ResponseField>
+    <ResponseField name="color" type="string">
+      Background color for the badge, e.g. `'#9146FF'` or `'transparent'`.
+    </ResponseField>
+    <ResponseField name="addon" type="string | boolean">
+      Set to your add-on ID string to mark this as an add-on badge (visible in the "Add-on" section of badge visibility settings). The add-on proxy sets this automatically.
+    </ResponseField>
+    <ResponseField name="replaces" type="boolean">
+      When `true`, this badge replaces the built-in badge in the same slot.
+    </ResponseField>
+    <ResponseField name="replaces_type" type="string">
+      The Twitch badge type this badge should replace (e.g. `'moderator'`).
+    </ResponseField>
+    <ResponseField name="no_visibility" type="boolean">
+      Hides this badge from the badge visibility settings UI.
+    </ResponseField>
+    <ResponseField name="click_url" type="string">
+      URL to open when the badge is clicked.
+    </ResponseField>
+    <ResponseField name="click_handler" type="(user_id, user_login, room_id, room_login, badge_data, event) => string">
+      Function returning a URL when the badge is clicked. Takes precedence over `click_url`.
+    </ResponseField>
+    <ResponseField name="tooltipExtra" type="(data, badge, target, tip) => string | Promise<string>">
+      Optional extra content appended to the tooltip. May return a Promise.
+    </ResponseField>
+    <ResponseField name="content" type="function | ReactNode">
+      Optional custom content rendered inside the badge element.
+    </ResponseField>
+    <ResponseField name="css" type="string">
+      Raw CSS appended to the generated badge rule.
+    </ResponseField>
+    <ResponseField name="base_id" type="string">
+      If set, groups multiple badge IDs under a single entry in the visibility UI.
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+<Warning>
+Badge IDs must contain your add-on ID. In development mode the add-on proxy logs a warning if this check fails.
+</Warning>
+
+### `removeBadge(badge_id)`
+
+Unregisters a badge and regenerates the badge CSS.
+
+```javascript
+badges.removeBadge('my-addon:supporter');
+```
+
+---
+
+## Assigning badges to users
+
+### `setBulk(source, badge_id, entries)`
+
+Efficiently assigns a badge to a large set of users by Twitch user ID without creating individual `User` objects. Ideal for hundreds of users or more.
+
+```javascript
+badges.setBulk('my-addon', 'my-addon:supporter', [
+  '12345678',
+  '87654321',
+]);
+```
+
+<ParamField path="source" type="string" required>
+  A namespaced key identifying the source of this assignment. Must include your add-on ID.
+</ParamField>
+<ParamField path="badge_id" type="string" required>
+  The badge to assign.
+</ParamField>
+<ParamField path="entries" type="string[]" required>
+  Array of Twitch user ID strings.
+</ParamField>
+
+### `extendBulk(source, badge_id, entries)`
+
+Appends user IDs to an existing bulk assignment without replacing the full set.
+
+```javascript
+badges.extendBulk('my-addon', 'my-addon:supporter', ['99999999']);
+```
+
+### `deleteBulk(source, badge_id)`
+
+Removes all bulk badge assignments registered under `source` for `badge_id`.
+
+```javascript
+badges.deleteBulk('my-addon', 'my-addon:supporter');
+```
+
+### Per-user assignment via `chat.getUser`
+
+For individual users, go through the `User` object from the `chat` module:
+
+```javascript
+const chat = this.resolve('chat');
+const user = chat.getUser('12345678', 'some_viewer');
+user.addBadge('my-addon', 'my-addon:vip');
+
+// Remove later
+user.removeBadge('my-addon', 'my-addon:vip');
+```
+
+---
+
+## CSS_BADGES
+
+`CSS_BADGES` is an internal constant that defines color and rendering overrides for built-in Twitch badges across badge style versions 1 and 2. Add-ons do not need to modify this object.
+
+The structure is:
+
+```javascript
+const CSS_BADGES = {
+  // version 1 (pre-December 2019 badge assets)
+  1: {
+    staff:        { 1: { color: '#200f33', svg: true, trans: { color: '#6441a5' } } },
+    admin:        { 1: { color: '#faaf19', svg: true } },
+    global_mod:   { 1: { color: '#0c6f20', svg: true } },
+    broadcaster:  { 1: { color: '#e71818', svg: true } },
+    moderator:    { 1: { color: '#34ae0a', svg: true } },
+    partner:      { 1: { color: 'transparent', trans: { image: true, color: '#6441a5' } } },
+    vip:          { 1: { color: '#b33ff0' } },
+    turbo:        { 1: { color: '#6441a5', svg: true } },
+    premium:      { 1: { color: '#009cdc' } },
+    subscriber:   { 0: { color: '#6441a5' }, 1: { color: '#6441a5' } },
+    // …
+  },
+  // version 2 (current badge assets)
+  2: {
+    staff:        { 1: { color: '#000' } },
+    broadcaster:  { 1: { color: '#E91916' } },
+    moderator:    { 1: { color: '#00AD03' } },
+    partner:      { 1: { color: '#9146FF' } },
+    vip:          { 1: { color: '#E005B9' } },
+    'bot-badge':  { 1: { color: '#00A3A3' } },
+    // …
+  }
+};
+```
+
+Each entry's value can include:
+
+| Field | Type | Description |
+|---|---|---|
+| `color` | `string` | Badge background color. |
+| `svg` | `boolean` | `true` when the source image is an SVG. |
+| `trans` | `object` | Overrides applied for transparent / masked badge styles. |
+| `trans.color` | `string` | Alternative color for transparent styles. |
+| `trans.image` | `boolean` | `true` to use the image in transparent style. |
+| `trans.invert` | `boolean` | `false` to suppress auto-inversion. |
+
+---
+
+## BADGE_POSITIONS
+
+Built-in slot assignments for known Twitch badges:
+
+| Badge ID | Slot |
+|---|---|
+| `staff` | `-2` |
+| `admin` | `-1` |
+| `global_mod` | `-1` |
+| `broadcaster` | `0` |
+| `moderator` / `lead_moderator` | `1` |
+| `twitchbot` / `bot-badge` | `2` |
+| `vip` | `3` |
+| `subscriber` | `25` |
+
+Custom badges should use a `slot` value outside this range to avoid conflicts.
+
+---
+
+## Key events
+
+| Event | Description |
+|---|---|
+| `chat:reload-data` | When `flags.badges` is set (or `flags` is falsy), global badge data is reloaded from the FFZ API. |
+| `addon:fully-unload` | All badges whose `__source` matches the unloading add-on ID are automatically removed. |
+
+<Info>
+Global badge data (including FFZ supporter, subwoofer, and bot badges) is loaded automatically on startup from `https://api.frankerfacez.com/v1/badges/ids`. Add-ons do not need to call this endpoint directly.
+</Info>

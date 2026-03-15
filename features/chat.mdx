@@ -1,0 +1,146 @@
+---
+title: "Chat Enhancements"
+description: "How FrankerFaceZ enhances Twitch chat with tokenization, rich content, filtering, highlighting, and more."
+---
+
+FFZ's chat module (`src/modules/chat/index.js`) replaces Twitch's default message rendering pipeline with a fully extensible tokenizer-based system. Every message flows through a prioritized chain of tokenizers that inject typed tokens — emotes, links, mentions, bits, and more — before rendering.
+
+<CardGroup cols={2}>
+  <Card title="Tokenization Pipeline" icon="code-branch">
+    Messages are parsed by a chain of registered tokenizers, each producing typed tokens rendered as custom elements.
+  </Card>
+  <Card title="Rich Content" icon="image">
+    Links to Twitch clips, videos, and user pages expand into card previews inline or in tooltips.
+  </Card>
+  <Card title="Filtering & Highlighting" icon="filter">
+    Highlight or block messages by user, badge, or keyword with priority-based color rules.
+  </Card>
+  <Card title="Moderation Tools" icon="shield">
+    Configurable deleted message rendering, AutoMod integration, and artificial chat delay.
+  </Card>
+</CardGroup>
+
+## Chat Tokenization Pipeline
+
+Each chat message is processed by iterating `this.__tokenizers` — an array sorted by `priority` (higher runs first). The default built-in tokenizers and their priorities are:
+
+| Tokenizer | Type Key | Priority | Function |
+|---|---|---|---|
+| `FilterTester` | `filter_test` | 1000 | Debug overlay listing active filter reasons (requires `chat.filtering.debug`) |
+| `Links` | `link` | 50 | Detects URLs via `NEW_LINK_REGEX` and renders `<a>` elements with rich tooltips |
+| `Mentions` | `mention` | — | Parses `@username` tokens |
+| Emotes (FFZ + Twitch) | `emote` | — | Matches known emote names and injects emote image tokens |
+| Cheers | `cheer` | — | Detects cheer amounts and injects animated bit gem tokens |
+
+Add-ons can register additional tokenizers with `chat.addTokenizer()`.
+
+## Rich Content (Link Cards)
+
+FFZ registers three built-in **link providers** (`src/modules/chat/link_providers.js`) that intercept matched URLs and resolve them into structured card data:
+
+### Clip Provider
+
+Matches `clips.twitch.tv/<slug>` and `twitch.tv/<user>/clip/<slug>`. Queries Apollo GraphQL for clip metadata and returns a `header` token with:
+- Clip thumbnail (16:9 aspect ratio)
+- Clip title
+- Broadcaster and game name
+- Curator name and view count
+
+When larger rich content is enabled (`chat.rich.want-mid`), the card also embeds an inline `clips.twitch.tv/embed` iframe.
+
+### Video Provider
+
+Matches `twitch.tv/videos/<id>` and `twitch.tv/<user>/v/<id>`. Resolves VOD metadata via GraphQL.
+
+### User Provider
+
+Matches `twitch.tv/<username>` (excluding known Twitch paths like `directory`, `settings`, `prime`, etc.). Resolves user data via `site.twitch_data.getUser()`.
+
+### Rich Content Settings
+
+| Setting Key | Default | Description |
+|---|---|---|
+| `chat.rich.enabled` | `true` | Show rich content blocks for linked clips and videos |
+| `chat.rich.want-mid` | `false` | Show larger embeds (not recommended for moderators) |
+| `chat.rich.hide-tokens` | `false` | Hide the source link text when a rich card is shown |
+| `chat.rich.all-links` | `false` | Show rich embeds for all links, not just recognized ones |
+| `chat.rich.minimum-level` | `0` (Everyone) | Minimum user level required to trigger rich embeds |
+
+## Link Tooltips
+
+Hovering any link in chat shows a tooltip powered by `rich_tokens`. The tooltip fetches link metadata from the FFZ link resolver service and renders it using `rich_tokens.renderTokens()`. Unsafe URLs flagged by the resolver display a warning with the flag reasons. Holding Shift reveals the full redirect chain.
+
+The link resolver source can be configured in `Debugging > Data Sources >> Links` (`debug.link-resolver.source`).
+
+## Viewer Cards
+
+Clicking a username in chat opens Twitch's viewer card. FFZ adds an option (`chat.filtering.clickable-mentions`, default `false`) to also open viewer cards by clicking `@mention` tokens.
+
+## Chat Filtering and Moderation
+
+FFZ provides a multi-rule filtering system under `Chat > Filtering`.
+
+### Highlighting
+
+Rules under `Chat > Filtering > Highlight` match messages and apply a background color. Rules have a numeric **priority**: higher-priority rules override lower ones when a message matches multiple rules. Setting a color with `alpha = 0` creates a rule that _removes_ highlights from matching messages.
+
+Highlight sources:
+- **Users** (`chat.filtering.highlight-basic-users`) — exact, glob, or raw regex username matching
+- **Badges** (`chat.filtering.highlight-basic-badges`) — badge type/version matching
+- **Terms** (`chat.filtering.highlight-basic-terms`) — case-insensitive word, glob, or regex matching; can also optionally highlight the matched token in-line
+
+Self-mention highlighting is controlled by `chat.filtering.highlight-mentions` (default `false`) with a configurable priority (`chat.filtering.mention-priority`) and custom color (`chat.filtering.mention-color`).
+
+### Blocking
+
+Messages can be blocked (hidden) by user, badge, or term. Block rules live under `Chat > Filtering > Block` and support the same term types as highlights. Messages from your own account are excluded by default (`chat.filtering.process-own`).
+
+### AutoMod Integration
+
+| Setting Key | Default | Description |
+|---|---|---|
+| `chat.automod.delete-messages` | `true` | Mark messages as deleted if they contain a filtered phrase |
+| `chat.automod.remove-messages` | `true` | Remove filtered messages entirely |
+| `chat.automod.run-as-mod` | `false` | Apply Chat Filters even when you are a moderator |
+
+### Deleted Messages
+
+| Setting Key | Default | Description |
+|---|---|---|
+| `chat.filtering.display-deleted` | `false` | Override Twitch's deleted message rendering mode |
+| `chat.filtering.deleted-style` | `1` | Visual style for deleted messages in Detailed mode |
+| `chat.filtering.display-mod-action` | `1` | When to show the reason for deletion |
+| `chat.filtering.remove-deleted` | `1` | `0`=keep, `1`=remove unseen, `2`=remove unseen as mod, `3`=remove all |
+| `chat.filtering.click-to-reveal` | `false` | Click deleted messages to reveal their content |
+| `chat.filtering.ignore-clear` | `false` | Ignore `/clear` commands from moderators |
+
+## Message Highlighting Display
+
+When `chat.filtering.highlight-tokens` is enabled, FFZ highlights the specific matched word within the message using a colored inline marker. The `chat.filtering.all-mentions` setting (default `false`) makes FFZ recognize mentions without requiring an `@` prefix — useful for communities that mention users by name.
+
+## Chat Appearance
+
+| Setting Key | Default | Description |
+|---|---|---|
+| `chat.font-size` | `14` | Font size in pixels for chat messages |
+| `chat.font-family` | `''` | Custom font family for chat |
+| `chat.timestamp-size` | `null` | Timestamp font size (falls back to `chat.font-size`) |
+| `chat.name-format` | `0` | Username display: 0=International (Username), 1=International only, 2=Username only |
+| `chat.lines.emote-alignment` | `0` | 0=Standard, 1=Padded, 2=Baseline (BTTV-like) |
+
+## Chat Scrolling and Behavior
+
+| Setting Key | Default | Description |
+|---|---|---|
+| `chat.scrollback-length` | `150` | Maximum number of chat lines to keep in memory |
+| `chat.delay` | `-1` | Artificial chat delay in milliseconds (−1 = room default) |
+
+The delay setting ranges from no delay to 60 seconds, with a special "CBenni Option" of 25 years (`788400000000` ms).
+
+## Hidden Token Types
+
+The `chat.filtering.hidden-tokens` setting lets you suppress entire token types from appearing in messages. For example, you can hide all cheer tokens or all emote tokens. Any tokenizer type that registers a `render` function appears in the list.
+
+## Emote Menu Integration
+
+The chat input area integrates with the FFZ emote menu, which displays available emotes grouped by provider. The `chat.effects.enable` setting controls whether modifier effects are processed when composing messages.

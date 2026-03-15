@@ -1,0 +1,318 @@
+---
+title: "Settings Utility"
+description: "The SettingsManager module registers, retrieves, and reacts to typed user settings backed by pluggable storage providers."
+---
+
+
+## Overview
+
+`SettingsManager` is the central module for the FFZ settings system. It manages setting definitions, profiles, storage providers, and a context-aware resolution pipeline that can return different values depending on the current page, channel, or user state.
+
+```typescript
+// From within a Module, settings is always available as:
+const settings = this.resolve('settings');
+
+// In add-on code:
+this.settings.add('my-addon.my-setting', { ... });
+const value = this.settings.get('my-addon.my-setting');
+```
+
+<Note>
+  `SettingsManager` is a `Module` and is available under the path `settings` in the module hierarchy. Add-ons receive a scoped proxy automatically; you should use `this.settings` rather than resolving it yourself.
+</Note>
+
+---
+
+## Registering Settings
+
+### `add(key, definition, source?)`
+
+Register a new setting definition. If the key was previously referenced as a dependency by another setting, any queued dependency tracking is resolved automatically.
+
+<ParamField path="key" type="SettingsKeys" required>
+  The unique string key for this setting. By convention, add-ons prefix their keys with their add-on ID, e.g. `"my-addon.feature-enabled"`.
+</ParamField>
+
+<ParamField path="definition" type="SettingDefinition<T>" required>
+  An object describing the setting. See [SettingDefinition](#settingdefinition) below.
+</ParamField>
+
+<ParamField path="source" type="string">
+  The add-on ID that owns this setting. Populated automatically when called through the add-on proxy.
+</ParamField>
+
+```typescript
+this.settings.add('my-addon.show-badges', {
+  default: true,
+  ui: {
+    path: 'Add-Ons > My Addon >> Appearance',
+    title: 'Show Badges',
+    component: 'setting-check-box',
+  }
+});
+```
+
+---
+
+### `addUI(key, definition, source?)`
+
+Register a UI-only entry (e.g. a heading, separator, or informational panel) that does not correspond to a stored setting value.
+
+```typescript
+this.settings.addUI('my-addon.header', {
+  path: 'Add-Ons > My Addon',
+  title: 'My Addon',
+  component: 'setting-text-box',
+  description: 'Configuration for My Addon.'
+});
+```
+
+---
+
+### `remove(key)`
+
+Unregister a previously-added setting definition. Emits `:removed-definition`.
+
+---
+
+## Reading and Writing Values
+
+### `get(key)`
+
+Read the current resolved value for a setting from the main context. Returns the setting's `default` if no profile has set a value.
+
+<ParamField path="key" type="AllSettingsKeys" required>
+  The setting key. Also accepts `context.*` keys to read context data and `ls.*` keys to read `localStorage` values.
+</ParamField>
+
+<ResponseField name="returns" type="T">
+  The resolved, processed setting value.
+</ResponseField>
+
+```typescript
+const enabled = this.settings.get('my-addon.show-badges'); // boolean
+const theme = this.settings.get('context.ui.theme');        // number | undefined
+```
+
+---
+
+### `onChange(key, fn, ctx?)`
+
+Register a callback that fires whenever the resolved value of `key` changes. The callback receives the new value.
+
+<ParamField path="key" type="SettingsKeys" required>
+  The setting key to watch.
+</ParamField>
+
+<ParamField path="fn" type="(val: T) => void" required>
+  The callback to invoke on change.
+</ParamField>
+
+<ParamField path="ctx" type="any">
+  The `this` context for the callback.
+</ParamField>
+
+```typescript
+this.settings.onChange('my-addon.show-badges', (enabled) => {
+  this.updateBadges(enabled);
+}, this);
+```
+
+---
+
+### `getChanges(key, fn, ctx?)`
+
+Like `onChange`, but also invokes the callback immediately with the current value. Useful for initializing state from a setting without duplicating the logic.
+
+```typescript
+this.settings.getChanges('my-addon.show-badges', (enabled) => {
+  this.badgesEnabled = enabled;
+  this.refresh();
+}, this);
+```
+
+---
+
+### `update(key)`
+
+Force the context to re-evaluate and rebroadcast the current value of `key`. Useful after programmatic profile changes.
+
+---
+
+## Context
+
+### `setContext(context)`
+
+Set or replace the entire context data object used for profile matching and `context.*` setting resolution.
+
+### `updateContext(context)`
+
+Merge partial context data into the existing context.
+
+```typescript
+this.settings.updateContext({
+  channel: 'lirik',
+  channelID: '23161357',
+  moderator: false,
+});
+```
+
+---
+
+## Profile Management
+
+Settings values are stored inside **profiles**. The active set of profiles is determined by the current context — a profile's `context` filter rules must all pass for it to be active.
+
+### `profile(id)`
+
+Look up a `SettingsProfile` by numeric ID or UUID.
+
+### `createProfile(options?)`
+
+Create a new profile and return its `SettingsProfile` instance. Emits `:profile-created`.
+
+### `deleteProfile(id)`
+
+Delete a profile by ID or instance. Emits `:profile-deleted`. Throws if only one profile remains.
+
+### `moveProfile(id, index)`
+
+Reorder a profile in the priority list. Emits `:profiles-reordered`.
+
+---
+
+## Provider System
+
+Settings are stored by a **provider**. FFZ ships with two built-in providers:
+
+| Key | Class | Description |
+|---|---|---|
+| `local` | `LocalStorageProvider` | Stores settings in `localStorage`. Default. |
+| `idb` | (IndexedDB-based) | Stores settings in IndexedDB. Allows larger payloads. |
+
+### `getProviders()`
+
+Returns a map of all registered provider keys to their constructor.
+
+### `getActiveProvider()`
+
+Returns the string key of the currently active provider (e.g. `"local"`).
+
+### `changeProvider(key, transfer)`
+
+Switch to a different provider. If `transfer` is `true`, all existing settings are copied to the new provider. The page will reload after the transfer completes.
+
+<Warning>
+  `changeProvider` causes a full page reload. Only call this in response to an explicit user action.
+</Warning>
+
+---
+
+## Events
+
+Subscribe to setting changes via the standard event system:
+
+```typescript
+// React to any setting change
+this.on('settings:changed:my-addon.show-badges', (newValue, oldValue) => {
+  console.log('setting changed', newValue, oldValue);
+});
+
+// React to profile changes
+this.on('settings:profile-created', (profile) => {
+  console.log('new profile', profile.id);
+});
+```
+
+| Event | Payload | Description |
+|---|---|---|
+| `:changed:<key>` | `[newValue, oldValue]` | A setting's resolved value changed. |
+| `:added-definition` | `[key, definition]` | A new setting was registered. |
+| `:removed-definition` | `[key, definition]` | A setting was unregistered. |
+| `:profile-created` | `[profile]` | A new profile was created. |
+| `:profile-changed` | `[profile]` | A profile's metadata changed. |
+| `:profile-deleted` | `[profile]` | A profile was deleted. |
+| `:profile-toggled` | `[profile, enabled]` | A profile was enabled or disabled. |
+| `:profiles-reordered` | `[]` | Profiles were reordered. |
+
+---
+
+## Type Reference
+
+### `SettingDefinition<T>`
+
+```typescript
+type SettingDefinition<T> = {
+  default: T | ((ctx: SettingsContext) => T);
+  type?: string;
+
+  requires?: string[];
+  required_by?: string[];
+
+  always_inherit?: boolean;
+  inherit_default?: boolean;
+
+  process?(ctx: SettingsContext, val: T, meta: SettingMetadata): T;
+  equals?: 'requirements' | ((newVal: T, oldVal: T | undefined, ...) => boolean);
+
+  changed?: (value: T) => void;
+
+  ui: SettingUiDefinition<T>;
+};
+```
+
+<ResponseField name="default" type="T | ((ctx) => T)" required>
+  The default value returned when no profile provides a value. Can be a plain value or a function receiving the active `SettingsContext`.
+</ResponseField>
+
+<ResponseField name="ui" type="SettingUiDefinition<T>" required>
+  Controls how the setting appears in the FFZ Control Center. At minimum, provide `path`, `title`, and `component`.
+</ResponseField>
+
+<ResponseField name="process" type="function">
+  An optional post-processor called after the value is resolved from profiles. Use it to clamp, transform, or validate the raw stored value.
+</ResponseField>
+
+<ResponseField name="changed" type="(value: T) => void">
+  A shorthand listener for the `:changed:<key>` event. Registered when `add()` is called and removed when `remove()` is called.
+</ResponseField>
+
+---
+
+### `SettingUiDefinition<T>`
+
+```typescript
+type SettingUiDefinition<T> = {
+  key?: string;
+  path: string;
+  path_tokens?: PathNode[];
+
+  title: string;
+  i18n_key?: string;
+
+  description?: string;
+  desc_i18n_key?: string;
+
+  component: string;
+  // Component-specific fields...
+};
+```
+
+<ResponseField name="path" type="string" required>
+  A `>>`-separated path in the Control Center navigation tree. E.g. `"Add-Ons > My Addon >> Feature"`.
+</ResponseField>
+
+<ResponseField name="component" type="string" required>
+  The Vue component to render. Built-in options: `setting-check-box`, `setting-text-box`, `setting-select-box`, `setting-combo-box`.
+</ResponseField>
+
+---
+
+### Built-in UI Components
+
+| Component | Description |
+|---|---|
+| `setting-check-box` | Boolean toggle. |
+| `setting-text-box` | Free-form text input. Supports `process: 'to_int'` or `'to_float'` with optional `bounds`. |
+| `setting-select-box` | Dropdown with a static or dynamic list of `{ value, title }` entries. |
+| `setting-combo-box` | Combined select and free-text input. |

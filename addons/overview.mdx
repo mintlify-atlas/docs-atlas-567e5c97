@@ -1,0 +1,99 @@
+---
+title: "Add-On Overview"
+description: "An introduction to the FrankerFaceZ add-on system, its ecosystem, and the APIs available to add-on authors."
+---
+
+FrankerFaceZ (FFZ) add-ons are independently developed modules that extend the functionality of the core extension. They are loaded dynamically at runtime, can be enabled or disabled by the user without a page reload in most cases, and have access to a well-defined set of internal APIs.
+
+## The Add-On Ecosystem
+
+Add-ons are distributed through the official FFZ add-ons server. When FFZ initializes, the `AddonManager` fetches a manifest from the server:
+
+```
+${SERVER_OR_EXT}/addons.json
+```
+
+Each entry in that manifest describes an add-on and provides the URL of its compiled script. When a user enables an add-on, FFZ injects a `<script>` tag into the page and waits for the add-on's root module to call `Addon.register()`. After registration, FFZ calls `enable()` on the module and the add-on becomes active.
+
+### Development Server
+
+During development, you can serve your own add-on manifest from `https://localhost:8001/script/addons.json`. Enable the **Use Local Development Server** setting (`addons.dev.server`) in **Add-Ons >> Development** within the FFZ settings panel to load entries from your local server in addition to the production CDN.
+
+<Warning>
+  The development server option is not available when running as a browser extension because loading external code violates extension store policies.
+</Warning>
+
+## Module vs. Addon
+
+FFZ uses a module system in which every feature is a discrete `Module` instance organized into a tree. The `Addon` class is a specialized subclass of `Module` intended as the **root module** of an add-on.
+
+| | `Module` | `Addon` |
+|---|---|---|
+| Purpose | Any reusable component | Root of an add-on |
+| Auto-injects `i18n` / `settings` | No | Yes |
+| Has `static register()` | No | Yes |
+| Tracks addon ID in module tree | Only if child of `Addon` | Yes |
+
+For a single-file add-on you subclass `Addon` directly. For larger add-ons with multiple sub-modules you subclass `Addon` for the root and `Module` for every child, then use `loadFromContext()` or `inject()` to wire them together.
+
+## Add-On Lifecycle Events
+
+The `AddonManager` emits the following events on its own event bus:
+
+| Event | Signature | Description |
+|---|---|---|
+| `:ready` | `[]` | All enabled add-ons have started loading after the initial data fetch. |
+| `:data-loaded` | `[]` | The add-on manifest has been fetched and processed. |
+| `:addon-loaded` | `[id: string]` | A specific add-on's script has been loaded and its module registered. |
+| `:addon-enabled` | `[id: string]` | A specific add-on has been marked as enabled in settings. |
+| `:addon-disabled` | `[id: string]` | A specific add-on has been marked as disabled in settings. |
+
+Individual modules also emit lifecycle events on themselves:
+
+| Module Event | When |
+|---|---|
+| `:registered` | Immediately after the module instance is created. |
+| `:loaded` | After `onLoad()` resolves. |
+| `:unloaded` | After `onUnload()` resolves. |
+| `:enabled` | After `onEnable()` resolves. |
+| `:disabled` | After `onDisable()` resolves. |
+
+## Available APIs
+
+<CardGroup cols={2}>
+  <Card title="Settings" icon="sliders">
+    Register settings that appear in the FFZ settings panel and react to value changes. Accessed via `this.settings` (auto-injected).
+  </Card>
+  <Card title="i18n" icon="language">
+    Translate UI strings with ICU message format. Accessed via `this.i18n` (auto-injected).
+  </Card>
+  <Card title="Logging" icon="terminal">
+    Structured logging scoped to your module. Accessed via `this.log`.
+  </Card>
+  <Card title="Events" icon="bolt">
+    Publish and subscribe to events across the module tree. Inherited from `EventEmitter`.
+  </Card>
+  <Card title="Chat Integration" icon="message-square">
+    Add tokenizers, rich content providers, and link providers to the chat rendering pipeline.
+  </Card>
+  <Card title="Emotes & Badges" icon="smile">
+    Register custom emote sets and badges, scoped to a provider ID that includes your add-on's ID.
+  </Card>
+</CardGroup>
+
+## Further Reading
+
+<CardGroup cols={2}>
+  <Card title="Getting Started" href="/addons/getting-started">
+    Create your first add-on from scratch.
+  </Card>
+  <Card title="The Addon Class" href="/addons/addon-class">
+    Full reference for `Addon` and `Module`.
+  </Card>
+  <Card title="Settings API" href="/addons/settings-api">
+    Register and react to settings.
+  </Card>
+  <Card title="Chat Integration" href="/addons/chat-integration">
+    Hook into the chat rendering pipeline.
+  </Card>
+</CardGroup>

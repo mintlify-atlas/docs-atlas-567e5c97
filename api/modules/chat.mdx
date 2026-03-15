@@ -1,0 +1,392 @@
+---
+title: "Chat Module"
+description: "The central chat module that manages tokenizers, rooms, users, and message rendering for FrankerFaceZ add-ons."
+---
+
+The `Chat` module is the root of FFZ's chat subsystem. It orchestrates message tokenization, rich content, link resolution, room and user state, and badge/emote rendering. Add-ons interact with it at path `'chat'`.
+
+```javascript
+// Accessing the chat module from an add-on
+const chat = this.resolve('chat');
+```
+
+## Module path
+
+```
+chat
+```
+
+Source: `src/modules/chat/index.js`
+
+## Tokenizers
+
+Tokenizers transform an array of raw text tokens into richly-typed token objects (emotes, mentions, links, cheers, etc.). They run in descending `priority` order on every chat message.
+
+### `addTokenizer(tokenizer)`
+
+Registers a tokenizer. If a tokenizer with the same `type` is already present, the call is silently ignored.
+
+```javascript
+chat.addTokenizer({
+  type: 'my-addon-emotes',
+  priority: 10,
+
+  // Called once per message. Returns the new token array.
+  process(tokens, msg, user) {
+    return tokens.flatMap(token => {
+      if (token.type !== 'text') return token;
+      // … split text token into text + emote tokens …
+      return [token];
+    });
+  },
+
+  // Optional tooltip factory bound to this.tooltips.types[type]
+  tooltip(target, tip) {
+    return 'My emote tooltip';
+  }
+});
+```
+
+<ParamField path="tokenizer" type="object" required>
+  <Expandable title="Tokenizer object">
+    <ResponseField name="type" type="string" required>
+      Unique identifier for this tokenizer. Used as the key in `chat.tokenizers`.
+    </ResponseField>
+    <ResponseField name="priority" type="number" default="0">
+      Determines run order. Higher numbers run earlier.
+    </ResponseField>
+    <ResponseField name="process" type="(tokens, msg, user, haltable) => Token[] | null">
+      Called with the current token array, the raw message object, an optional user object, and whether early-exit is supported. Must return the new token array, or `null`/`undefined` to leave tokens unchanged.
+    </ResponseField>
+    <ResponseField name="tooltip" type="function">
+      If provided, registered as `this.tooltips.types[type]`. Receives `(target, tip)` and returns tooltip content.
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+### `removeTokenizer(id)`
+
+Unregisters a tokenizer by its `type` string or by passing the tokenizer object itself.
+
+```javascript
+chat.removeTokenizer('my-addon-emotes');
+// or
+chat.removeTokenizer(myTokenizerObject);
+```
+
+<ParamField path="id" type="string | object" required>
+  The `type` string of the tokenizer, or the tokenizer object itself.
+</ParamField>
+
+---
+
+## Rich providers
+
+Rich providers examine link tokens in a message and return an embeddable card object (a clip preview, video thumbnail, etc.).
+
+### `addRichProvider(provider)`
+
+```javascript
+chat.addRichProvider({
+  type: 'my-addon-cards',
+  priority: 0,
+
+  // Return true/truthy if this provider handles the token
+  test(token, msg) {
+    return token.type === 'link' && token.url.includes('example.com');
+  },
+
+  // Return a rich content descriptor object
+  process(token, want_mid) {
+    return {
+      type: 'my-card',
+      url: token.url
+    };
+  }
+});
+```
+
+<ParamField path="provider" type="object" required>
+  <Expandable title="Rich provider object">
+    <ResponseField name="type" type="string" required>
+      Unique identifier.
+    </ResponseField>
+    <ResponseField name="priority" type="number" default="0">
+      Higher values run first.
+    </ResponseField>
+    <ResponseField name="test" type="(token, msg) => boolean" required>
+      Returns `true` when this provider should handle the given link token.
+    </ResponseField>
+    <ResponseField name="process" type="(token, want_mid) => object" required>
+      Builds and returns the rich content descriptor. `want_mid` is `true` when the user has opted in to larger embed sizes.
+    </ResponseField>
+    <ResponseField name="can_hide_token" type="boolean">
+      If `true`, the matching link token can be hidden when `chat.rich.hide-tokens` is enabled.
+    </ResponseField>
+    <ResponseField name="hide_token" type="boolean">
+      If `true`, always hides the matching link token regardless of user settings.
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+### `removeRichProvider(id)`
+
+Unregisters a rich provider by its `type` string or object reference.
+
+---
+
+## Link providers
+
+Link providers fetch metadata for URLs encountered in chat. Matched URLs are cached in `this._link_info` for 2 minutes.
+
+### `addLinkProvider(provider)`
+
+```javascript
+chat.addLinkProvider({
+  type: 'my-addon-links',
+  priority: 0,
+
+  // Return a truthy value (e.g. regex match array) if this provider handles the URL
+  test(url) {
+    return /example\.com\/clip\/(.+)/.exec(url);
+  },
+
+  // Return metadata, or a Promise that resolves to metadata
+  process(match, data) {
+    return fetch(`https://api.example.com/clip/${match[1]}`).then(r => r.json());
+  },
+
+  // Optional: called when Twitch's own embed system pushes data for this URL
+  receive(match, twitchData) {
+    return twitchData;
+  }
+});
+```
+
+<ParamField path="provider" type="object" required>
+  <Expandable title="Link provider object">
+    <ResponseField name="type" type="string" required>
+      Unique identifier.
+    </ResponseField>
+    <ResponseField name="priority" type="number" default="0">
+      Higher values run first.
+    </ResponseField>
+    <ResponseField name="test" type="(url: string) => any" required>
+      Called with the raw URL string. Return a truthy value (passed on to `process`) to claim the URL.
+    </ResponseField>
+    <ResponseField name="process" type="(match, data) => any | Promise<any>" required>
+      Returns the metadata object or a Promise for it. `match` is whatever `test` returned; `data` is from `receive` or `undefined`.
+    </ResponseField>
+    <ResponseField name="receive" type="(match, twitchData) => any">
+      Optional. Called when Twitch's PubSub delivers link embed data. Pre-processes the payload before `process` is called.
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+### `removeLinkProvider(id)`
+
+Unregisters a link provider by its `type` string or object reference.
+
+---
+
+## Rooms and users
+
+### `getRoom(id, login, no_create?)`
+
+Returns a `Room` instance for the given channel. Creates one lazily unless `no_create` is `true`.
+
+```javascript
+const room = chat.getRoom('12345', 'streamer_login');
+const roomByLogin = chat.getRoom(null, 'streamer_login');
+const roomOrNull = chat.getRoom(null, 'streamer_login', true); // no_create
+```
+
+<ParamField path="id" type="string | null" required>
+  The channel's Twitch numeric ID as a string, or `null` if unknown.
+</ParamField>
+<ParamField path="login" type="string | null" required>
+  The channel's login name, or `null` if unknown.
+</ParamField>
+<ParamField path="no_create" type="boolean" default="false">
+  When `true`, returns `null` instead of creating a new Room if one does not already exist.
+</ParamField>
+
+<ResponseField name="returns" type="Room | null">
+  A `Room` instance, or `null` when `no_create` is `true` and the room does not exist.
+</ResponseField>
+
+### `getUser(id, login, no_create?)`
+
+Returns a global (cross-channel) `User` instance. Useful for associating badges or emote sets with a user regardless of which room they are in.
+
+```javascript
+const user = chat.getUser('98765', 'some_viewer');
+user.addBadge('my-addon', 'my-badge-id');
+```
+
+<ParamField path="id" type="string | null" required>
+  The user's Twitch numeric ID, or `null`.
+</ParamField>
+<ParamField path="login" type="string | null" required>
+  The user's login name, or `null`.
+</ParamField>
+<ParamField path="no_create" type="boolean" default="false">
+  When `true`, returns `null` instead of creating a new User.
+</ParamField>
+
+<ResponseField name="returns" type="User | null">
+  A `User` instance, or `null` when `no_create` is `true` and no match is found.
+</ResponseField>
+
+---
+
+## Tokenizing messages
+
+### `tokenizeString(message, msg, user, haltable?)`
+
+Runs `message` through all registered tokenizers and returns the resulting token array. Use this when you need to tokenize a string that does not come from a chat message object.
+
+```javascript
+const tokens = chat.tokenizeString('Hello PogChamp world', msgObject, userObject);
+```
+
+<ParamField path="message" type="string" required>
+  The plain-text string to tokenize.
+</ParamField>
+<ParamField path="msg" type="object | null">
+  The raw message object. May be `null` if no message context is available.
+</ParamField>
+<ParamField path="user" type="object | null">
+  The sender's user object. May be `null`.
+</ParamField>
+<ParamField path="haltable" type="boolean" default="false">
+  When `true`, a tokenizer may set `msg.ffz_halt_tokens = true` to stop further processing.
+</ParamField>
+
+<ResponseField name="returns" type="Token[]">
+  Array of token objects. Each token has at least a `type` string field.
+</ResponseField>
+
+### `tokenizeMessage(msg, user, haltable?)`
+
+Similar to `tokenizeString`, but operates on a full standardized message object. Reads the message text from `msg.message`.
+
+---
+
+## Room sub-module API
+
+A `Room` object (returned by `chat.getRoom(...)`) represents a single Twitch channel. It manages per-room emote sets, badges, and per-room user objects.
+
+### Properties
+
+<ResponseField name="id" type="string | null">
+  The Twitch channel ID.
+</ResponseField>
+<ResponseField name="login" type="string | null">
+  The channel's login name.
+</ResponseField>
+<ResponseField name="data" type="object | null">
+  Data loaded from the FFZ API for this channel (mod badge URLs, custom CSS, etc.).
+</ResponseField>
+<ResponseField name="emote_sets" type="SourcedSet<string> | null">
+  Sourced set of emote set IDs active in this room.
+</ResponseField>
+<ResponseField name="badges" type="object | null">
+  Room-specific Twitch badge data keyed by badge ID.
+</ResponseField>
+
+### `addSet(provider, set_id, data?)`
+
+Associates an emote set with this room under the given provider key.
+
+```javascript
+const room = chat.getRoom(null, 'streamer_login');
+room.addSet('my-addon', 'my-addon:set-1', setData);
+```
+
+<ParamField path="provider" type="string" required>
+  A namespaced provider ID (should include your add-on ID).
+</ParamField>
+<ParamField path="set_id" type="string" required>
+  The emote set ID to add.
+</ParamField>
+<ParamField path="data" type="object">
+  Optional emote set data to load via `emotes.loadSetData`.
+</ParamField>
+
+### `removeSet(provider, set_id)`
+
+Removes an emote set association from this room.
+
+### `removeAllSets(provider)`
+
+Removes all emote sets registered under a provider key for this room.
+
+### `getUser(id, login, no_create?)`
+
+Returns a room-scoped `User` object.
+
+### `ref(referrer)` / `unref(referrer)`
+
+Lifecycle reference counting. Call `ref` to keep the room alive. Call `unref` when your component unmounts. The room destroys itself 5 seconds after reaching zero references.
+
+---
+
+## User sub-module API
+
+A `User` object represents a viewer and holds their badges and emote sets. Users can be global (from `chat.getUser`) or room-scoped (from `room.getUser`).
+
+### `addBadge(provider, badge_id, data?)`
+
+Adds a badge to this user.
+
+```javascript
+const user = chat.getUser('98765', 'viewer');
+user.addBadge('my-addon', 'my-addon:vip');
+```
+
+<ParamField path="provider" type="string" required>
+  Namespaced provider key (should contain your add-on ID).
+</ParamField>
+<ParamField path="badge_id" type="string" required>
+  The badge ID as registered with `chat.badges.loadBadgeData`.
+</ParamField>
+<ParamField path="data" type="object">
+  Optional extra data merged into the badge assignment record.
+</ParamField>
+
+### `removeBadge(provider, badge_id)`
+
+Removes a specific badge from this user under the given provider.
+
+### `removeAllBadges(provider)`
+
+Removes all badges registered under a provider key for this user.
+
+### `addSet(provider, set_id, data?)`
+
+Adds an emote set to this user (visible globally, across all rooms).
+
+### `removeSet(provider, set_id)` / `removeAllSets(provider)`
+
+Removes one or all emote sets from this user under a provider key.
+
+---
+
+## Key events
+
+Listen for these events on the `chat` module using `this.on(...)` or `chat.on(...)`.
+
+| Event | Arguments | Description |
+|---|---|---|
+| `:room-add` | `room: Room` | Fired when a new Room is created. |
+| `:room-remove` | `room: Room` | Fired just before a Room is destroyed. |
+| `:room-update-login` | `room: Room, login: string` | Fired when a Room's login name changes. |
+| `:update-line-tokens` | — | Request to re-tokenize all visible chat lines. |
+| `chat:reload-data` | `flags?` | Request to reload FFZ API data. Set `flags.emotes` or `flags.badges` to reload selectively. |
+| `chat:click-link` | `FFZEvent` | Fired when a chat link is clicked. Call `event.preventDefault()` to suppress default behavior. |
+| `chat.emotes:click` | `FFZEvent` | Fired when a chat emote is clicked. Call `event.preventDefault()` to suppress built-in behavior. |
+
+<Note>
+All events prefixed with `:` (e.g. `:room-add`) are namespaced to the `chat` module. Listen on the module instance: `chat.on(':room-add', handler)`.
+</Note>

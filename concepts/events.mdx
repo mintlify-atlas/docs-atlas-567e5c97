@@ -1,0 +1,284 @@
+---
+title: "Events System"
+description: "FrankerFaceZ uses a custom EventEmitter with priorities, auto-removal symbols, and a hierarchical namespace system. Every Module is an event emitter, and events flow through the shared listener pool of the entire module tree."
+---
+
+FFZ's event system is implemented in `src/utilities/events.ts`. The base `EventEmitter` class provides priority-ordered listeners, TTL-based auto-removal, and two special return values. The `HierarchicalEventEmitter` subclass adds namespaced paths, which powers the `Module` event system.
+
+## Basic usage
+
+Every `Module` is a `HierarchicalEventEmitter`. You can use `on`, `off`, `once`, `many`, `emit`, and `waitFor` directly on any module instance.
+
+```typescript
+// Listen for an event
+this.on('settings:changed:my-addon.enabled', (newVal, oldVal) => {
+    console.log('Setting changed:', newVal);
+}, this);
+
+// Fire an event
+this.emit(':my-event', someData);
+
+// Remove a listener
+this.off('settings:changed:my-addon.enabled', handlerFn, this);
+```
+
+## API reference
+
+### on(event, fn, ctx?, priority?, prepend?)
+
+Register a persistent event listener.
+
+```typescript
+this.on(
+    'settings:changed:my-addon.enabled',  // event key (absolute or relative)
+    (newVal, oldVal) => { /* ... */ },     // listener function
+    this,                                  // context (this binding)
+    0,                                     // priority — lower fires first (default: 0)
+    false                                  // prepend — insert at front of same-priority group
+);
+```
+
+### off(event?, fn?, ctx?)
+
+Remove one or more listeners. All arguments are optional, but at least one must be provided. All listeners matching the provided criteria are removed.
+
+```typescript
+// Remove a specific listener
+this.off('settings:changed:my-addon.enabled', handlerFn, this);
+
+// Remove all listeners for an event
+this.off('settings:changed:my-addon.enabled');
+
+// Remove all listeners registered with a given context
+this.off(undefined, undefined, this);
+```
+
+### emit(event, ...args)
+
+Fire an event. All listeners are called in priority order. Errors thrown by individual listeners are caught and logged — they do not stop other listeners from running.
+
+```typescript
+this.emit(':my-event', arg1, arg2);
+```
+
+<Warning>
+  `emit` throws if called recursively for the same event (i.e. if an event listener emits the same event). It also throws if `off` is called for the same event while it is running.
+</Warning>
+
+### once(event, fn, ctx?, priority?, prepend?)
+
+Register a listener that fires exactly once and is then automatically removed. Equivalent to `many(event, 1, fn, ...)`.
+
+```typescript
+this.once(':ready', () => {
+    console.log('Module is ready');
+}, this);
+```
+
+### many(event, ttl, fn, ctx?, priority?, prepend?)
+
+Register a listener that fires at most `ttl` times before being removed.
+
+```typescript
+// Fire at most 5 times
+this.many(':data-loaded', 5, (data) => {
+    console.log('Got data:', data);
+}, this);
+```
+
+### waitFor(event, ctx?, priority?, prepend?)
+
+Returns a `Promise` that resolves with the event arguments the next time the event fires.
+
+```typescript
+const [data] = await this.waitFor(':ready');
+```
+
+This is particularly useful in `onEnable()` or `onLoad()` when you need to wait for another module's event before proceeding.
+
+## Special return values
+
+Listeners can return two special symbols to control event processing.
+
+### Detach
+
+Returning `Detach` from a listener causes it to be automatically removed after it fires. This is useful when you want to listen to a specific occurrence without using `once()` or managing the removal yourself.
+
+```typescript
+import { Detach } from 'utilities/events';
+// or via the static property:
+// EventEmitter.Detach
+
+this.on(':data-loaded', (data) => {
+    if ( data.type !== 'initial' )
+        return; // keep listening
+
+    this._processInitialData(data);
+    return Detach; // remove this listener now
+}, this);
+```
+
+### StopPropagation
+
+Returning `StopPropagation` stops iteration and prevents any further listeners from receiving the event. This is equivalent to calling `.stopPropagation()` on a DOM event.
+
+```typescript
+import { StopPropagation } from 'utilities/events';
+// or via the static property:
+// EventEmitter.StopPropagation
+
+this.on(':before-render', (ctx) => {
+    if ( ! this._shouldIntercept(ctx) )
+        return;
+
+    this._handleRender(ctx);
+    return StopPropagation; // no further listeners will run
+}, this, -10); // high priority — runs before default handlers
+```
+
+<Note>
+  Returning `StopPropagation` does not remove the listener. If you want both behaviours, return `Detach` and separately call `stopPropagation()` on the event object (if you're using `FFZEvent`).
+</Note>
+
+## Namespaced events
+
+FFZ's event system is hierarchical. All modules in the tree share a **single listener pool** stored at the root. When a module emits `:some-event`, the system converts it to the module's absolute path, e.g. `settings:some-event`, before dispatching.
+
+This means you can listen for events on any module from any other module using absolute paths:
+
+```typescript
+// From any module, listen to an event on SettingsManager
+this.on('settings:changed:my-addon.enabled', (newVal, oldVal) => {
+    // ...
+}, this);
+
+// From any module, listen to an event on AddonManager
+this.on('addons:ready', () => {
+    // ...
+}, this);
+
+// From any module, listen to an event on a specific add-on
+this.on('addon.my-addon:initialized', () => {
+    // ...
+}, this);
+```
+
+### Relative event paths
+
+From inside a module, events starting with `:` are **relative** — they're automatically prefixed with the module's own path.
+
+```typescript
+// Inside a module at path 'site.chat':
+this.emit(':update');          // fires 'site.chat:update'
+this.on(':update', fn, this);  // listens for 'site.chat:update'
+
+// Relative navigation using dots:
+this.on('..player:resize', fn, this); // listens for 'site.player:resize' (sibling)
+this.on('..:route-changed', fn, this); // listens for 'site:route-changed' (parent)
+```
+
+The `abs_path()` method resolves any path to its absolute form:
+
+```typescript
+// From a module at 'site.chat'
+this.abs_path(':update');        // 'site.chat:update'
+this.abs_path('..');             // 'site'
+this.abs_path('..player');       // 'site.player'
+this.abs_path('..:route-changed'); // 'site:route-changed'
+```
+
+## Module lifecycle events
+
+Every module automatically emits lifecycle events on itself when its state changes. These are defined in `src/utilities/module.ts`:
+
+```typescript
+export type ModuleEvents = {
+    ':registered': [module: GenericModule];
+    ':loaded':     [module: GenericModule];
+    ':unloaded':   [module: GenericModule];
+    ':enabled':    [module: GenericModule];
+    ':disabled':   [module: GenericModule];
+};
+```
+
+You can listen for these to react when any specific module becomes ready:
+
+```typescript
+// Wait until the add-on manager is enabled
+this.on('addons:enabled', () => {
+    // addons is now fully enabled
+}, this);
+
+// Or use waitFor for one-shot async waiting:
+await this.waitFor('addons:enabled');
+```
+
+## Typed events with EventMap
+
+The `EventEmitter` and `Module` classes accept a generic `TEventMap` parameter that lets TypeScript enforce event argument types:
+
+```typescript
+type MyModuleEvents = {
+    ':data-loaded': [data: MyData];
+    ':error':       [err: Error, context: string];
+};
+
+class MyModule extends Module<'my-path', MyModuleEvents> {
+    doSomething() {
+        // TypeScript knows the argument types
+        this.emit(':data-loaded', myData);
+        this.emit(':error', new Error('oops'), 'context');
+    }
+}
+
+// Consumers also get type safety:
+mod.on(':data-loaded', (data) => {
+    // data is typed as MyData
+});
+```
+
+The `SettingsManager` uses this extensively to type its `:changed:*` events:
+
+```typescript
+// From src/settings/index.ts
+export type SettingsEvents = {
+    [K in keyof SettingsTypeMap as `:changed:${K}`]: [value: SettingsTypeMap[K], old_value: SettingsTypeMap[K]];
+} & {
+    ':profile-created': [profile: SettingsProfile];
+    ':profile-changed': [profile: SettingsProfile];
+    ':profile-deleted': [profile: SettingsProfile];
+    ':profiles-reordered': [];
+    // ...
+};
+```
+
+## FFZEvent and FFZWaitableEvent
+
+For events where the emitter needs feedback from listeners, FFZ provides `FFZEvent` and `FFZWaitableEvent`.
+
+`FFZEvent` supports `stopPropagation()` and `preventDefault()`, similar to DOM events:
+
+```typescript
+import { FFZEvent } from 'utilities/events';
+
+const evt = FFZEvent.makeEvent({ token: myToken, message: msg });
+this.emit(':filter-token', evt);
+
+if ( evt.defaultPrevented ) {
+    // a listener said to skip the default handling
+}
+```
+
+`FFZWaitableEvent` additionally lets listeners register async promises that the emitter can await before continuing:
+
+```typescript
+import { FFZWaitableEvent } from 'utilities/events';
+
+const evt = FFZWaitableEvent.makeEvent({ items });
+this.emit(':process-items', evt);
+
+// Wait for all listener promises to resolve
+const results = await evt._wait();
+```
+
+Listeners can either return a `Promise` directly (it is captured automatically) or call `evt.waitFor(promise)` explicitly.

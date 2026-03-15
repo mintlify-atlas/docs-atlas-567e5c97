@@ -1,0 +1,300 @@
+---
+title: "Settings System"
+description: "SettingsManager provides a typed, profile-aware key-value store for configuration. Modules register settings with defaults and UI descriptors, and the system handles persistence, merging, and change notifications automatically."
+---
+
+The settings system is managed by `SettingsManager` (`src/settings/index.ts`). It provides:
+
+- **Profiles** — named collections of setting values, stacked and merged in priority order
+- **Contexts** — the current environment data (current channel, route, UI state) used to select active profiles
+- **Providers** — pluggable storage backends (localStorage, IndexedDB)
+- **Definitions** — typed declarations that drive both persistence and UI generation
+
+## Architecture
+
+```
+SettingsManager
+├── provider (SettingsProvider)       — reads/writes raw values
+├── __profiles (SettingsProfile[])    — ordered list of profiles
+└── main_context (SettingsContext)    — the active context, selects profiles
+    └── __cache                       — resolved values for the current context
+```
+
+When a setting is read, `SettingsContext` iterates the active profiles from highest to lowest priority and returns the first value it finds. If no profile has a value, the definition's `default` is used.
+
+When context data changes (e.g. the user navigates to a different channel), `SettingsContext.selectProfiles()` re-evaluates which profiles are active and recomputes the cache.
+
+## Defining a setting
+
+Call `settings.add(key, definition)` to register a setting. The key is a dot-separated string. The definition provides the default value and an optional UI descriptor.
+
+```typescript
+// From src/addons.ts — a boolean setting with a checkbox UI
+this.settings.add('addons.dev.server', {
+    default: false,
+    ui: {
+        path: 'Add-Ons >> Development',
+        title: 'Use Local Development Server',
+        description: 'Attempt to load add-ons from local development server on port 8001.',
+        component: 'setting-check-box'
+    }
+});
+```
+
+### SettingDefinition structure
+
+The full definition type, from `src/settings/types.ts`:
+
+```typescript
+type FullSettingDefinition<T> = {
+    // The default value, or a function that computes it from the context.
+    default: ((ctx: SettingsContext) => T) | T;
+
+    // Optional type handler key (e.g. 'basic', 'object_merge').
+    type?: string;
+
+    // Custom equality check used to decide if a changed event should fire.
+    equals?: 'requirements' | ((new_value: T, old_value: T | undefined, ...) => boolean);
+
+    // Custom processing function applied after the raw value is retrieved.
+    process?(ctx: SettingsContext, val: T, meta: SettingMetadata): T;
+
+    // Keys of settings this one depends on (for cascaded defaults).
+    requires?: string[];
+
+    // Whether this setting always inherits from the parent profile.
+    always_inherit?: boolean;
+    inherit_default?: boolean;
+
+    // UI descriptor (see below)
+    ui?: SettingUiDefinition<T>;
+
+    // Called whenever the effective value changes.
+    changed?: (value: T) => void;
+};
+```
+
+### UI descriptor
+
+The `ui` field controls how the setting appears in the FFZ settings panel.
+
+```typescript
+type SettingUi_Basic = {
+    // Dot-separated path in the settings panel. Use ' >> ' to create nested groups.
+    path: string;
+
+    // The display title.
+    title: string;
+
+    // Optional description shown below the control.
+    description?: string;
+
+    // The Vue component used to render this setting.
+    component: string;
+};
+```
+
+The `path` field uses `>` to separate levels in the settings panel hierarchy. A double `>>` creates a sub-page within the section.
+
+## Built-in UI components
+
+<Tabs>
+  <Tab title="setting-check-box">
+    A boolean toggle rendered as a checkbox.
+
+    ```typescript
+    this.settings.add('my-addon.show-badges', {
+        default: true,
+        ui: {
+            path: 'My Add-On >> General',
+            title: 'Show Badges',
+            description: 'Display custom badges in chat.',
+            component: 'setting-check-box'
+        }
+    });
+    ```
+  </Tab>
+  <Tab title="setting-text-box">
+    A text input. Supports optional numeric processing.
+
+    ```typescript
+    // String value
+    this.settings.add('my-addon.custom-text', {
+        default: '',
+        ui: {
+            path: 'My Add-On >> General',
+            title: 'Custom Text',
+            component: 'setting-text-box'
+        }
+    });
+
+    // Integer value with bounds [0, true, 100, true] means 0 <= x <= 100
+    this.settings.add('my-addon.badge-size', {
+        default: 18,
+        ui: {
+            path: 'My Add-On >> General',
+            title: 'Badge Size',
+            component: 'setting-text-box',
+            process: 'to_int',
+            bounds: [1, true, 64, true]
+        }
+    });
+    ```
+  </Tab>
+  <Tab title="setting-select-box">
+    A dropdown. `data` is an array of `{ value, title }` entries, or a function returning one.
+
+    ```typescript
+    this.settings.add('my-addon.layout', {
+        default: 'grid',
+        ui: {
+            path: 'My Add-On >> General',
+            title: 'Layout',
+            component: 'setting-select-box',
+            data: [
+                { value: 'grid',   title: 'Grid' },
+                { value: 'list',   title: 'List' },
+                { value: 'compact', title: 'Compact' }
+            ]
+        }
+    });
+    ```
+  </Tab>
+  <Tab title="Other components">
+    Additional components available in FFZ:
+
+    | Component | Use |
+    |---|---|
+    | `setting-color-box` | Color picker with hex/RGBA input |
+    | `setting-combo-box` | Dropdown with free-text entry |
+    | `setting-check-box-list` | Multiple checkboxes from a `data` array |
+    | `setting-textarea` | Multi-line text input |
+    | `setting-tone-picker` | Emoji skin tone selector |
+    | `addon-list` | Special component for the add-ons page |
+    | `changelog` | Special component for add-on changelog pages |
+
+    Components that don't match a built-in type are passed through directly to Vue, so you can register and use your own Vue components.
+  </Tab>
+</Tabs>
+
+## Reading settings
+
+`settings.get(key)` returns the effective value for the current context. This is a synchronous read from the resolved cache:
+
+```typescript
+// Read a value
+const devServer = this.settings.get('addons.dev.server'); // boolean
+
+// Read a context value (no definition needed)
+const channel = this.settings.get('context.channel');     // string | undefined
+const route   = this.settings.get('context.route.name'); // string | undefined
+```
+
+## Reacting to changes
+
+Use `settings.getChanges()` to get the current value **and** register a listener that's called whenever the value changes. This is the recommended way to use settings inside `onEnable()`.
+
+```typescript
+async onEnable() {
+    this.settings.getChanges('my-addon.show-badges', val => {
+        this._applyBadgeSetting(val);
+    }, this);
+}
+```
+
+`getChanges()` calls the callback immediately with the current value, then calls it again whenever the value changes. The third argument is the context (`this`) to bind the callback to.
+
+To listen for changes without an immediate call, use `settings.onChange()`:
+
+```typescript
+this.settings.onChange('my-addon.show-badges', val => {
+    console.log('Badge setting changed to', val);
+}, this);
+```
+
+You can also listen to the raw settings event on the module:
+
+```typescript
+// SettingsManager emits ':changed:<key>' for every changed setting.
+this.on('settings:changed:my-addon.show-badges', (newVal, oldVal) => {
+    console.log(`Changed from ${oldVal} to ${newVal}`);
+}, this);
+```
+
+## Settings profiles
+
+Profiles are named sets of setting values. They stack: the context selects a list of active profiles in priority order, and the highest-priority profile that has a value for a given key wins.
+
+Profiles can have a **context filter** — a set of rules that determines whether the profile is active in the current context. For example, a profile can be configured to activate only on a specific channel or route.
+
+```typescript
+// Create a new profile
+const profile = this.settings.createProfile({
+    name: 'Streamer Mode',
+    description: 'Applied when viewing a specific channel.'
+});
+
+// Delete a profile
+this.settings.deleteProfile(profile.id);
+
+// Listen for profile changes
+this.on('settings:profile-created', profile => { /* ... */ });
+this.on('settings:profile-changed', profile => { /* ... */ });
+this.on('settings:profile-deleted', profile => { /* ... */ });
+this.on('settings:profiles-reordered', () => { /* ... */ });
+```
+
+<Note>
+  Two built-in profiles always exist: **Default** (applies everywhere) and **Moderation** (applies when the user is a moderator). Deleting the last profile throws an error.
+</Note>
+
+## Settings context
+
+The context is a set of key-value data describing the current state of the Twitch page. It drives profile selection. The full set of context fields is defined in `src/settings/types.ts`:
+
+```typescript
+interface ConcreteContextData {
+    addonDev: boolean;
+    category: string;
+    categoryID: string;
+    channel: string;
+    channelColor: string;
+    channelID: string;
+    chatHidden: boolean;
+    fullscreen: boolean;
+    isWatchParty: boolean;
+    moderator: boolean;
+    route: { domain: string | null; name: string | null; };
+    route_data: string[];
+    size: { width: number; height: number };
+    ui: { theatreModeEnabled: boolean; squadModeEnabled: boolean; theme: number; };
+}
+```
+
+The site module updates the context as the user navigates:
+
+```typescript
+// Update one or more context values
+this.settings.updateContext({ channel: 'example', moderator: true });
+
+// Replace the entire context
+this.settings.setContext({ channel: 'example' });
+
+// Read a context value directly
+const isFullscreen = this.settings.get('context.fullscreen'); // boolean | undefined
+```
+
+## Settings providers
+
+The provider is the storage backend. FFZ ships with two:
+
+| Key | Class | Notes |
+|---|---|---|
+| `local` | `LocalStorageProvider` | Stores settings in `localStorage`. The default fallback. |
+| `idb` | `IndexedDBProvider` | Stores settings in IndexedDB. Supports blobs. Higher capacity. |
+
+The active provider is selected automatically on startup by examining which provider already has content. Users can switch providers in the settings panel. Switching transfers all settings and reloads the page.
+
+<Tip>
+  Add-ons do not need to interact with providers directly. Use `settings.add()`, `settings.get()`, and `settings.getChanges()` for all settings work.
+</Tip>

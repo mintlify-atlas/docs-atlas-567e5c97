@@ -1,0 +1,204 @@
+---
+title: "Logging Utility"
+description: "A hierarchical logger that writes styled console output at configurable severity levels and captures early init messages."
+---
+
+
+## Overview
+
+FFZ provides a structured logging system through the `Logger` class. All `Module` instances expose a pre-configured `this.log` property, so in most cases you will not need to instantiate `Logger` directly.
+
+```typescript
+import Logger, { LogLevel } from 'utilities/logging';
+```
+
+---
+
+## Log Levels
+
+```typescript
+export enum LogLevel {
+  Verbose = 0,
+  Debug   = 1,
+  Info    = 2,
+  Warning = 4,
+  Error   = 8,
+  Off     = 99
+}
+```
+
+The active level is determined at construction time. Messages below the active level are silently discarded. The default level is `LogLevel.Info`.
+
+<Tip>
+  During development, set `localStorage.ffzLogLevel = 'debug'` (or `'verbose'`) in your browser console to see more output without modifying any code.
+</Tip>
+
+---
+
+## Logger Class
+
+```typescript
+class Logger {
+  constructor(
+    parent: Logger | null,
+    name: string | null,
+    level?: LogLevel | null,
+    raven?: any
+  )
+}
+```
+
+### Static Level Constants
+
+```typescript
+Logger.VERBOSE  // 0
+Logger.DEBUG    // 1
+Logger.INFO     // 2
+Logger.WARN     // 4
+Logger.WARNING  // 4  (alias)
+Logger.ERROR    // 8
+Logger.OFF      // 99
+
+Logger.DEFAULT_LEVEL  // LogLevel.Info
+```
+
+---
+
+## Instance Methods
+
+### `get(name, level?)`
+
+Create or retrieve a child logger. Child loggers inherit the parent's level unless overridden.
+
+<ParamField path="name" type="string" required>
+  The subcategory name. The child logger's full name will be `parent.name.name`.
+</ParamField>
+
+<ParamField path="level" type="LogLevel">
+  An explicit level for the child. Falls back to the parent's level when omitted.
+</ParamField>
+
+<ResponseField name="returns" type="Logger">
+  The child `Logger` instance. Repeated calls with the same name return the same instance.
+</ResponseField>
+
+```typescript
+// Inside a Module:
+const subLog = this.log.get('parser');
+subLog.info('Parsing started');
+// Output: FFZ [my-module.parser]: Parsing started
+```
+
+---
+
+### Logging Methods
+
+All logging methods accept a primary `message` and optional additional arguments, mirroring the `console.*` API.
+
+| Method | Level | Console target |
+|---|---|---|
+| `verbose(message, ...args)` | `Verbose` | `console.debug` |
+| `debug(message, ...args)` | `Debug` | `console.debug` |
+| `info(message, ...args)` | `Info` | `console.info` |
+| `warn(message, ...args)` | `Warning` | `console.warn` |
+| `warning(message, ...args)` | `Warning` | `console.warn` (alias) |
+| `error(message, ...args)` | `Error` | `console.error` |
+
+All of these also have a `*Color` variant (e.g. `debugColor`) that accepts a `colors` string array for `%c` style formatting.
+
+```typescript
+this.log.info('Module ready after', duration, 'ms');
+this.log.warn('Unexpected response', response);
+this.log.error('Failed to load data', err);
+```
+
+---
+
+### `capture(exc, opts?, ...args)`
+
+Report an exception to the configured Raven/Sentry error tracking instance, if one is present. Optionally logs an additional error message.
+
+<ParamField path="exc" type="Error" required>
+  The exception to capture.
+</ParamField>
+
+<ParamField path="opts" type="object">
+  Options forwarded to `raven.captureException`. Defaults `opts.logger` to the logger's name.
+</ParamField>
+
+```typescript
+try {
+  await riskyOperation();
+} catch(err) {
+  this.log.capture(err, { tags: { subsystem: 'emotes' } });
+}
+```
+
+---
+
+### `crumb(...args)`
+
+Add a breadcrumb to the Raven/Sentry instance. Forwarded directly to `raven.captureBreadcrumb`.
+
+---
+
+## Init Capture
+
+During startup, before the root logger has been fully initialized, messages are buffered in `root.captured_init`. Once initialization completes (`root.init` is set to `true`), buffering stops and all subsequent messages go directly to the console.
+
+This lets FFZ replay its earliest log messages into error reports even if they fired before the error reporter was attached.
+
+```typescript
+// On the root logger only:
+root.init           // boolean — whether init phase is complete
+root.captured_init  // InitItem[] | undefined — buffered messages
+```
+
+<Info>
+  This is an internal mechanism. You do not need to interact with `captured_init` in add-on code.
+</Info>
+
+---
+
+## Instance Properties
+
+<ResponseField name="name" type="string | null">
+  The full dotted name of this logger (e.g. `"my-module.parser"`).
+</ResponseField>
+
+<ResponseField name="enabled" type="boolean">
+  When `false`, all log calls are suppressed regardless of level.
+</ResponseField>
+
+<ResponseField name="level" type="LogLevel">
+  The minimum level that will produce output.
+</ResponseField>
+
+<ResponseField name="root" type="Logger">
+  Reference to the root logger instance.
+</ResponseField>
+
+<ResponseField name="parent" type="Logger | null">
+  The parent logger, or `null` for the root.
+</ResponseField>
+
+<ResponseField name="children" type="Record<string, Logger>">
+  All child loggers created via `get()`.
+</ResponseField>
+
+---
+
+## Usage in Modules
+
+Every `Module` instance exposes `this.log` automatically. You do not need to import or construct a `Logger` yourself.
+
+```typescript
+export default class MyAddon extends Addon {
+  async onEnable() {
+    this.log.info('MyAddon enabled');
+
+    const subLog = this.log.get('network');
+    subLog.debug('Fetching data...');
+  }
+}
+```

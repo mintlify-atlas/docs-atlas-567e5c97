@@ -1,0 +1,280 @@
+---
+title: "Settings API"
+description: "Register settings that appear in the FFZ settings panel, read values, and react to changes."
+---
+
+The `SettingsManager` (accessible as `this.settings` inside any `Addon` or child `Module`) provides a full settings system with a UI, profile-based overrides, and a reactive event model.
+
+## Registering a Setting
+
+Call `this.settings.add(key, definition)` to register a setting. When called from within an add-on module, FFZ's add-on proxy automatically tags the setting with your add-on's ID so it can be cleaned up when the add-on is unloaded:
+
+```typescript
+this.settings.add('my-addon.show-widget', {
+  default: true,
+  ui: {
+    path: 'Add-Ons > My Add-On >> General',
+    title: 'Show Widget',
+    description: 'Display the widget in chat.',
+    component: 'setting-check-box',
+  },
+});
+```
+
+<Note>
+  Settings registered by your add-on are automatically removed when the add-on is disabled and fully unloaded. You do not need to call `settings.remove()` in `onDisable()`.
+</Note>
+
+## Settings Path Structure
+
+The `path` string in `ui` controls where the setting appears in the FFZ settings panel. The format is:
+
+```
+'Top-Level Category > Sub-Category >> Section'
+```
+
+| Separator | Meaning |
+|---|---|
+| ` > ` | New navigation level (creates a sidebar entry) |
+| ` >> ` | New tab within the current level |
+| ` ~> ` | New sub-tab |
+
+For add-on settings, use `'Add-Ons > My Add-On >> ...'` so your settings appear under the Add-Ons section:
+
+```typescript
+// Creates a sidebar entry 'My Add-On' under 'Add-Ons',
+// with a tab 'Features' inside it.
+path: 'Add-Ons > My Add-On >> Features'
+```
+
+The settings manager parses this path and automatically adds a **Changelog** link back to your add-on's changelog page in the panel header.
+
+## `SettingDefinition` Structure
+
+<ParamField path="default" type="T | ((ctx: SettingsContext) => T)" required>
+  The default value. Can be a literal or a function that receives the settings context and returns a value.
+</ParamField>
+
+<ParamField path="ui" type="SettingUiDefinition" optional>
+  Describes how the setting appears in the UI panel. If omitted, the setting is "headless" — it exists in the system but has no UI.
+</ParamField>
+
+<ParamField path="changed" type="(value: T) => void" optional>
+  Called whenever the effective value changes. Equivalent to subscribing to `settings.on(':changed:<key>', ...)`.
+</ParamField>
+
+<ParamField path="process" type="(ctx, val, meta) => T" optional>
+  A processor function applied to the raw stored value before it is returned. Use this to coerce or compute derived values.
+</ParamField>
+
+<ParamField path="requires" type="string[]" optional>
+  List of other setting keys this definition depends on. If those settings change, this setting will be recomputed.
+</ParamField>
+
+<ParamField path="type" type="string" optional>
+  A named type handler (e.g. `'object_merge'`, `'array_merge'`) that controls how values from multiple profiles are merged.
+</ParamField>
+
+## UI Component Types
+
+### Checkbox
+
+```typescript
+this.settings.add('my-addon.enabled', {
+  default: true,
+  ui: {
+    path: 'Add-Ons > My Add-On >> General',
+    title: 'Enable Feature',
+    component: 'setting-check-box',
+  },
+});
+```
+
+### Text Box
+
+```typescript
+this.settings.add('my-addon.font-size', {
+  default: 14,
+  ui: {
+    path: 'Add-Ons > My Add-On >> Appearance',
+    title: 'Font Size',
+    description: 'Size in pixels.',
+    component: 'setting-text-box',
+    process: 'to_int',   // built-in processor: parse as integer
+    bounds: [1],         // minimum value of 1
+  },
+});
+```
+
+The `process` field on the UI definition uses built-in processor names:
+
+| Value | Behavior |
+|---|---|
+| `'to_int'` | Parse raw string as integer |
+| `'to_float'` | Parse raw string as float |
+
+The optional `bounds` tuple constrains numeric values: `[min]`, `[min, max]`, or the full four-element form `[low, low_inclusive, high, high_inclusive]`.
+
+### Select Box
+
+```typescript
+this.settings.add('my-addon.mode', {
+  default: 0,
+  ui: {
+    path: 'Add-Ons > My Add-On >> General',
+    title: 'Display Mode',
+    component: 'setting-select-box',
+    data: [
+      { value: 0, title: 'Compact' },
+      { value: 1, title: 'Expanded' },
+      { value: 2, title: 'Minimal' },
+    ],
+  },
+});
+```
+
+The `data` array can also be a function `(profile, current) => entries[]` for dynamic option lists.
+
+### Color Box
+
+```typescript
+this.settings.add('my-addon.accent-color', {
+  default: '#6441a5',
+  ui: {
+    path: 'Add-Ons > My Add-On >> Appearance',
+    title: 'Accent Color',
+    component: 'setting-color-box',
+  },
+});
+```
+
+## Reading Settings
+
+Read the effective value for the current context:
+
+```typescript
+const enabled = this.settings.get('my-addon.enabled'); // boolean
+```
+
+This reads from `settings.main_context`, which is the merged result of all active profiles.
+
+## Reacting to Changes
+
+### `onChange` — subscribe to future changes
+
+```typescript
+this.settings.onChange('my-addon.enabled', (newValue) => {
+  this.applyVisibility(newValue);
+}, this);
+```
+
+### `getChanges` — receive the current value immediately, then all future changes
+
+```typescript
+this.settings.getChanges('my-addon.mode', (mode) => {
+  this.applyMode(mode);
+}, this);
+```
+
+`getChanges` calls the callback synchronously with the current value, then continues to call it on every future change. This is the preferred pattern for applying settings in `onEnable()`.
+
+### `changed` callback in the definition
+
+```typescript
+this.settings.add('my-addon.enabled', {
+  default: false,
+  changed: (value) => {
+    // Runs whenever the value changes in any profile.
+    this.updateUI();
+  },
+  ui: { ... },
+});
+```
+
+### Listening to settings events directly
+
+The `SettingsManager` emits typed events for every registered key:
+
+```typescript
+this.settings.on(':changed:my-addon.enabled', (newValue, oldValue) => {
+  this.log.info(`Setting changed: ${oldValue} → ${newValue}`);
+}, this);
+```
+
+## Profile-Based Settings
+
+FFZ supports multiple settings profiles. Each profile can override values for specific contexts (stream, channel, time of day, etc.). The `settings.get()` method automatically resolves the effective value by merging all active profiles according to the current context.
+
+You generally do not need to interact with profiles directly. The `settings.main_context` object handles profile selection and value resolution for you.
+
+## UI-Only Definitions with `addUI`
+
+For displaying non-value UI elements (custom components, section headers, etc.) use `settings.addUI()`:
+
+```typescript
+this.settings.addUI('my-addon.help-section', {
+  path: 'Add-Ons > My Add-On >> Help',
+  component: 'my-custom-help-component',
+  title: 'Getting Help',
+});
+```
+
+## Real Examples from FFZ Source
+
+Here is how FFZ's own `AddonManager` registers the development server toggle:
+
+```typescript
+// From src/addons.ts
+this.settings.add('addons.dev.server', {
+  default: false,
+  ui: {
+    path: 'Add-Ons >> Development',
+    title: 'Use Local Development Server',
+    description: 'Attempt to load add-ons from local development server on port 8001.',
+    component: 'setting-check-box'
+  }
+});
+```
+
+Here is how the chat module registers a numeric setting with a processor:
+
+```typescript
+// From src/modules/chat/index.js
+this.settings.add('chat.font-size', {
+  default: 14,
+  ui: {
+    path: 'Chat > Appearance >> General',
+    title: 'Font Size',
+    description: "How large should text in chat be, in pixels.",
+    component: 'setting-text-box',
+    process: 'to_int',
+    bounds: [1]
+  }
+});
+```
+
+Here is a select box with a `process` function that coerces legacy boolean values:
+
+```typescript
+// From src/modules/chat/badges.jsx
+this.settings.add('chat.badges.clickable', {
+  default: 2,
+  process(ctx, val) {
+    if (val === true)
+      return 2;
+    else if (val === false)
+      return 0;
+    return val;
+  },
+  ui: {
+    path: 'Chat > Badges >> Behavior',
+    title: 'Allow clicking badges.',
+    component: 'setting-select-box',
+    data: [
+      {value: 0, title: 'Disabled'},
+      {value: 1, title: 'Legacy (Open URLs)'},
+      {value: 2, title: 'Open Badge Card'}
+    ]
+  }
+});
+```

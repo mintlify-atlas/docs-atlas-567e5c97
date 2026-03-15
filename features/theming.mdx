@@ -1,0 +1,157 @@
+---
+title: "Theming and CSS Customization"
+description: "How FrankerFaceZ handles theme switching, custom colors, the CSS tweaks system, and applying custom styles."
+---
+
+FFZ provides a layered theming system built on top of Twitch's native light/dark toggle. It uses CSS custom properties (`--color-*`) to override Twitch's design tokens, a `CSSTweaks` module for toggling named CSS chunks and hiding elements, and a settings panel for custom colors and fonts.
+
+<CardGroup cols={2}>
+  <Card title="Theme Detection" icon="circle-half-stroke">
+    FFZ reads Twitch's theme state and can override it based on a custom background color's brightness.
+  </Card>
+  <Card title="Custom Colors" icon="palette">
+    Independently configure background, text, accent, and chat-specific colors via color pickers.
+  </Card>
+  <Card title="CSS Tweaks System" icon="code">
+    Named CSS chunks and element-hiding rules toggled at runtime by settings changes.
+  </Card>
+  <Card title="Custom CSS" icon="file-code">
+    Inject arbitrary CSS directly via the FFZ settings panel.
+  </Card>
+</CardGroup>
+
+## Theme Detection and Switching
+
+FFZ uses the computed setting `theme.is-dark` (`src/sites/twitch-twilight/modules/theme/index.js:239`) to track the current theme state:
+
+```javascript
+// theme.is-dark is true when:
+// - theatre mode is active, OR
+// - theme.can-dark is true AND Twitch's context.ui.theme === 1
+// - Embed chat with "?dark" in the URL
+```
+
+When a custom background color is set, FFZ computes its HSL lightness (`luma < 0.5` = dark) and automatically dispatches a `core.ui.THEME_CHANGED` action to Twitch's Redux store to keep Twitch's own UI in sync.
+
+`theme.can-dark` prevents the dark theme from activating on certain routes (`product`, `prime`, `turbo`) where Twitch does not support dark mode.
+
+The `theme.tooltips-dark` derived setting is the inverse of `theme.is-dark`, used to ensure tooltips contrast correctly with the page background.
+
+### Theme Quirks
+
+| Setting Key | Default | Description |
+|---|---|---|
+| `theme.disable-auto-dark` | `false` | Inject `:root{color-scheme: only light}` to block browser auto-dark conversion |
+| `theme.disable-high-contrast` | `false` | Inject `forced-color-adjust: none` to disable OS High Contrast mode |
+| `theme.high-contrast-tweaks` | `null` (auto) | Load additional High Contrast styles when OS forced colors are active |
+| `theme.legacy-dark-input` | `false` | Restore old dark-theme input element colors |
+
+## Custom Colors
+
+All color settings live under `Appearance > Theme >> Colors` and are applied by `updateCSS()` which generates CSS custom property blobs and calls `css_tweaks.set('colors', ...)` and `css_tweaks.set('chat-colors', ...)`.
+
+### Global Colors
+
+| Setting Key | CSS Variables Set | Description |
+|---|---|---|
+| `theme.color.background` | `--color-background-body`, `--color-background-base`, `--color-background-alt`, `--color-background-alt-2`, `--color-background-float` | Main page background |
+| `theme.color.text` | `--color-text-base`, `--color-text-input`, `--color-text-label`, `--color-text-alt`, `--color-text-alt-2` | Body text color |
+| `theme.color.accent` | `--ffz-color-accent-1` – `--ffz-color-accent-15`, plus all `--color-background-*`, `--color-border-*`, `--color-text-link`, etc. | Accent / brand color |
+| `theme.color.tooltip.background` | `--color-background-tooltip` | Tooltip background |
+| `theme.color.tooltip.text` | `--color-text-tooltip` | Tooltip text |
+
+### Chat Colors
+
+| Setting Key | Description |
+|---|---|
+| `theme.color.chat-background` | Override the chat pane background color |
+| `theme.color.chat-text` | Override the chat text color |
+| `theme.color.chat-accent` | Override the chat accent / link color |
+
+### Accent Color System
+
+When a custom accent is provided, FFZ generates a 15-step palette of lightness variants using the `COLORS` array:
+
+```javascript
+const COLORS = [
+  -0.62, -0.578, -0.539, -0.469, -0.4, -0.32, -0.21, -0.098, // steps 1-8
+  0, // step 9 = base accent
+  0.08, 0.151, 0.212, 0.271, 0.31, 0.351 // steps 10-15
+];
+```
+
+Each step maps to `--ffz-color-accent-N`. The `ACCENT_COLORS` object then maps Twitch's CSS design tokens (e.g. `--color-background-button-primary-default`) to specific steps for both dark and light modes.
+
+## Font Settings
+
+| Setting Key | Default | Range | Description |
+|---|---|---|---|
+| `theme.font.size` | `14` | 6 – 25 px | Sets `--font-size-1` through `--font-size-8` and `--font-size-base` |
+
+FFZ scales Twitch's entire font-size system proportionally. For example, at 14 px:
+- `--font-size-4` = `1rem` (base)
+- `--font-size-1` = `~4.286rem`
+- `--font-size-5` = `~0.857rem`
+
+## CSS Tweaks System
+
+The `CSSTweaks` class (`src/utilities/css-tweaks.ts`) is the backbone of FFZ's runtime CSS injection. It is available globally at `site.css_tweaks`.
+
+### Key Methods
+
+| Method | Description |
+|---|---|
+| `toggle(key, force?)` | Enable or disable a named CSS chunk loaded from the webpack chunk context |
+| `toggleHide(key, force?)` | Inject or remove a `{display: none !important}` rule for a selector registered in `rules` |
+| `set(key, value)` | Inject an arbitrary CSS string under a named key |
+| `delete(key)` | Remove a previously injected CSS block |
+| `setVariable(key, value, scope?)` | Set `--ffz-<key>` on `scope` (defaults to `body`) |
+| `deleteVariable(key)` | Remove a previously set CSS variable |
+
+### Element Hiding Rules (`CLASSES`)
+
+The `css_tweaks/index.js` registers selectors in a `CLASSES` constant. Each entry can be toggled with `toggleHide(key)`:
+
+| Key | Selector / Target |
+|---|---|
+| `side-nav` | `.side-nav, #sideNav` |
+| `side-nav-viewers` | `.side-nav-card__live-status` (viewer counts) |
+| `side-rec-channels` | Recommended / popular channels in the side nav |
+| `side-friends` | Online friends section in the side nav |
+| `player-ext` | All player extension overlays |
+| `player-event-bar` | `.channel-root .live-event-banner-ui__header` |
+| `pinned-cheer` | Pinned cheers, channel leaderboard elements |
+| `whispers` | Whisper threads and the whisper button |
+| `pinned-hype-chat` | `.paid-pinned-chat-message-list` |
+| `combos` | Combo streak pills and animation overlays |
+| `prime-offers` | Top nav Prime Gaming button |
+| `celebration` | Full-page celebration animation overlays |
+
+### Named CSS Chunks (`toggle`)
+
+Chunks are loaded from `css_tweaks/styles/` via a webpack require context. Examples of toggleable chunks include:
+
+- `swap-sidebars` — swaps the navigation and chat panels
+- `minimal-navigation` — slides the top nav out of view when idle
+- `theatre-nav` — shows the minimized nav bar in theatre mode
+- `hide-bits` — hides bits UI elements
+- `player-fade-paused` — fades the player when paused or buffering
+- `theatre-no-whispers` — hides whispers in theatre mode
+- `theatre-metadata` — shows metadata on hover in theatre mode
+
+## Applying Custom CSS
+
+You can inject arbitrary CSS via **Settings > Appearance > Custom CSS**. Styles are injected as a `<style>` block via `ManagedStyle` and persist across navigation within Twitch.
+
+<Tip>
+Use `setVariable` in add-on code to expose FFZ CSS variables for use in your own styles:
+
+```javascript
+ffz.site.css_tweaks.setVariable('my-color', '#ff0000');
+// Now usable in CSS as: var(--ffz-my-color)
+```
+</Tip>
+
+<Warning>
+Modifying `--color-*` variables directly may conflict with FFZ's own theme generation. Prefer using `--ffz-color-accent-*` variables or setting colors via the settings panel.
+</Warning>

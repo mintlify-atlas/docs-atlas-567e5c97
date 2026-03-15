@@ -1,0 +1,170 @@
+---
+title: "Code Style"
+description: "Formatting rules, ESLint configuration, and TypeScript conventions for FrankerFaceZ contributors."
+---
+
+## Formatting
+
+### Indentation
+
+Use **tabs** for indentation everywhere — not spaces. The tab width is 4 columns. This is enforced by both `.editorconfig` and ESLint.
+
+```javascript
+// correct
+function example() {
+	const value = 42;
+	if (value > 0) {
+		return value;
+	}
+}
+```
+
+<Note>
+  YAML files (`.yaml` / `.yml`) are the only exception: they use 2-space indentation.
+</Note>
+
+### Line Endings
+
+All files must use **LF** (`\n`) line endings. This is enforced as an ESLint error via `linebreak-style: unix`.
+
+### Other Formatting Rules
+
+- A final newline is inserted at the end of every file.
+- Trailing whitespace is trimmed from all lines (except in Markdown files).
+
+## ESLint Configuration
+
+The project uses ESLint 8 with the following configuration base (`.eslintrc.js`):
+
+- **`eslint:recommended`** — core recommended rules
+- **`plugin:vue/recommended`** — Vue 2 single-file component rules
+- **`plugin:react`** — JSX rules (React pragma is aliased to `createElement`)
+
+The parser is set to `ecmaVersion: latest` with `sourceType: module` and JSX support enabled.
+
+Run the linter with:
+
+```bash
+pnpm eslint
+```
+
+This checks all `src/**/*.{js,jsx,vue}` files.
+
+### Key Rules
+
+| Rule | Level | Notes |
+|---|---|---|
+| `indent` | warn | Tabs; `SwitchCase: 1` |
+| `linebreak-style` | error | Unix (LF) |
+| `quotes` | error | Single quotes; `avoidEscape` and template literals allowed |
+| `no-var` | error | Use `const` or `let` |
+| `prefer-const` | warn | Prefer `const` when variable is never reassigned |
+| `prefer-template` | warn | Use template literals instead of string concatenation |
+| `no-duplicate-imports` | error | One import per module |
+| `no-use-before-define` | error | Functions and classes are exempt |
+| `no-await-in-loop` | error | Avoid `await` inside loops |
+| `no-return-await` | error | Return promises directly |
+| `object-shorthand` | warn | Use ES6 property shorthand |
+| `prefer-arrow-callback` | warn | Arrow functions for callbacks |
+| `arrow-parens` | warn | Omit parens for single-argument arrows |
+| `jsx-quotes` | error | Double quotes in JSX attributes |
+
+### Vue-Specific Rules
+
+- HTML templates must use **tab** indentation (`vue/html-indent: tab`).
+- Closing brackets on multi-line elements must be on their own line (`vue/html-closing-bracket-newline`).
+- `vue/valid-template-root` is disabled — multiple root elements are permitted.
+- `vue/max-attributes-per-line` and prop type/default requirements are disabled.
+
+### JSX / React Rules
+
+FrankerFaceZ uses JSX in some components. The `react` pragma is mapped to `createElement` rather than `React.createElement`. Notable rules:
+
+- Props must be sorted: reserved props first, callbacks last (`react/jsx-sort-props`).
+- No inline function bindings in JSX (`react/jsx-no-bind`).
+- Multi-line JSX must be wrapped (`react/jsx-wrap-multilines`).
+- Boolean props must be explicit: `<Comp flag={true} />` not `<Comp flag />` (`react/jsx-boolean-value`).
+
+## TypeScript
+
+The project targets **ES2020** and compiles with **strict mode** fully enabled:
+
+```json
+{
+	"compilerOptions": {
+		"target": "ES2020",
+		"module": "ES2020",
+		"strict": true,
+		"strictNullChecks": true,
+		"strictFunctionTypes": true,
+		"noImplicitAny": true,
+		"noImplicitThis": true,
+		"alwaysStrict": true
+	}
+}
+```
+
+Key TypeScript conventions:
+
+- `moduleResolution` is set to `Bundler` — use bare specifiers and path aliases rather than relative deep imports where possible.
+- The JSX factory is `createElement` (not `React.createElement`). Set `jsxFactory: "createElement"` in `tsconfig.json`.
+- `importsNotUsedAsValues` is set to `error` — type-only imports must use `import type`.
+- JavaScript files are allowed (`allowJs: true`), so `.js` and `.ts` files coexist.
+
+### Path Aliases
+
+The following aliases are configured in `tsconfig.json` and resolved by webpack:
+
+| Alias | Resolves to |
+|---|---|
+| `src/*` | `./src/*` |
+| `utilities/*` | `./src/utilities/*` |
+| `styles/*` | `./styles/*` |
+| `res/*` | `./res/*` |
+| `root/*` | `./*` |
+| `site` | `./src/sites/twitch-twilight/index.js` |
+| `site/*` | `./src/sites/twitch-twilight/*` |
+
+## Module Patterns
+
+### `'use strict'`
+
+ES modules (files with `import`/`export`) do not require `'use strict'` — strict mode is implied. The ESLint `parserOptions.sourceType` is set to `module`, so all source files are treated as ES modules by default. Legacy CommonJS files outside `src/` (such as config files) include explicit `'use strict'` or `/* globals module */` annotations as appropriate.
+
+### Imports
+
+Use ES module `import` / `export` syntax throughout `src/`. CommonJS `require()` is only used in build-tool configuration files (webpack config, ESLint config, etc.).
+
+```javascript
+// correct — ES module import
+import { something } from 'utilities/something';
+
+// avoid in src/ — CommonJS
+const something = require('utilities/something');
+```
+
+## Vue Component Style
+
+Vue 2 single-file components (`.vue`) follow these conventions:
+
+- Template, script, and style blocks are indented with **tabs**.
+- Props do not require explicit type annotations or default values (those ESLint rules are disabled).
+- Multiple root elements in a template are allowed.
+- Closing brackets of multi-line elements must appear on their own line:
+
+```vue
+<template>
+	<div
+		class="example"
+		:value="someValue"
+	>
+		<span>content</span>
+	</div>
+</template>
+```
+
+## File Naming
+
+- Source files under `src/` use **kebab-case** (e.g., `my-module.js`).
+- Vue single-file components use **kebab-case** as well (e.g., `chat-line.vue`).
+- TypeScript declaration files live in the `types/` directory at the project root.

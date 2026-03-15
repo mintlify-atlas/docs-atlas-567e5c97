@@ -1,0 +1,268 @@
+---
+title: "Emotes Module"
+description: "The emotes sub-module that manages emote sets, providers, modifier flags, and per-room/user emote state."
+---
+
+The `Emotes` module handles all emote set management for FrankerFaceZ. It tracks which sets are loaded, manages reference counts, controls emote modifier effects, and exposes the provider registry used by the emote picker.
+
+```javascript
+// Accessing the emotes module from an add-on
+const emotes = this.resolve('chat.emotes');
+```
+
+## Module path
+
+```
+chat.emotes
+```
+
+Source: `src/modules/chat/emotes.js`
+
+---
+
+## Providers
+
+Providers appear in the emote picker as named sources (e.g. "FrankerFaceZ", "BTTV").
+
+### `setProvider(provider_id, data)`
+
+Registers or updates an emote provider. Pass `null` as `data` to remove the provider.
+
+```javascript
+emotes.setProvider('my-addon', {
+  name: 'My Add-on',
+  icon: 'https://cdn.example.com/icon.png',
+  // font_icon: 'ffz-i-myicon',  // alternative to icon
+});
+
+// Remove provider when add-on unloads
+emotes.setProvider('my-addon', null);
+```
+
+<ParamField path="provider_id" type="string" required>
+  A unique namespaced key for this provider. Should include your add-on ID.
+</ParamField>
+<ParamField path="data" type="object | null" required>
+  Provider metadata. Pass `null` to delete the provider.
+  <Expandable title="Provider data fields">
+    <ResponseField name="name" type="string">
+      Display name shown in the emote picker.
+    </ResponseField>
+    <ResponseField name="icon" type="string">
+      URL to the provider's icon.
+    </ResponseField>
+    <ResponseField name="font_icon" type="string">
+      CSS icon class (alternative to `icon`).
+    </ResponseField>
+    <ResponseField name="sort_key" type="number">
+      Controls ordering in the emote menu.
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+<Warning>
+Your add-on ID must appear somewhere in the `provider_id`. In development mode, FFZ will log a warning if this check fails.
+</Warning>
+
+---
+
+## Emote sets
+
+### `loadSetData(set_id, data)`
+
+Loads or updates the data for a named emote set. Processes all emote objects, generates CSS, and emits the `:loaded` event. Pass `null` as `data` to unload the set.
+
+```javascript
+emotes.loadSetData('my-addon:global', {
+  id: 'my-addon:global',
+  title: 'My Add-on Global Emotes',
+  emotes: [
+    {
+      id: 1001,
+      name: 'MyEmote',
+      urls: {
+        1: 'https://cdn.example.com/emote/1.png',
+        2: 'https://cdn.example.com/emote/2.png',
+        4: 'https://cdn.example.com/emote/4.png',
+      },
+      width: 28,
+      height: 28,
+    }
+  ]
+});
+
+// Unload the set
+emotes.loadSetData('my-addon:global', null);
+```
+
+<ParamField path="set_id" type="string" required>
+  Unique identifier for the emote set. Should contain your add-on ID.
+</ParamField>
+<ParamField path="data" type="EmoteSetData | null" required>
+  <Expandable title="EmoteSetData fields">
+    <ResponseField name="id" type="string | number">
+      Canonical ID of the set. Will be overwritten with `set_id`.
+    </ResponseField>
+    <ResponseField name="title" type="string">
+      Human-readable set name shown in the emote picker.
+    </ResponseField>
+    <ResponseField name="emotes" type="Emote[]" required>
+      Array of emote objects. Each emote must have `id`, `name`, and `urls`.
+    </ResponseField>
+    <ResponseField name="css" type="string">
+      Extra raw CSS appended to the generated emote stylesheet.
+    </ResponseField>
+    <ResponseField name="source" type="string">
+      Provider ID that "owns" this set. Determines the Shift-click URL for emotes.
+    </ResponseField>
+    <ResponseField name="__source" type="string">
+      Set automatically by the add-on proxy to your add-on ID.
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+### `addDefaultSet(provider, set_id, data?)`
+
+Makes an emote set available to all viewers globally (i.e. regardless of which channel they are in). This is the correct method for channel-independent emotes such as subscriber rewards or global add-on packs.
+
+```javascript
+emotes.addDefaultSet('my-addon', 'my-addon:global', setData);
+```
+
+<ParamField path="provider" type="string" required>
+  The provider key under which this set is registered. Must include your add-on ID.
+</ParamField>
+<ParamField path="set_id" type="string" required>
+  The ID of the emote set to add.
+</ParamField>
+<ParamField path="data" type="EmoteSetData">
+  Optional. If provided, calls `loadSetData(set_id, data)` first.
+</ParamField>
+
+### `removeDefaultSet(provider, set_id?)`
+
+Removes a previously added default set. If `set_id` is omitted, all sets registered under `provider` are removed.
+
+```javascript
+// Remove one set
+emotes.removeDefaultSet('my-addon', 'my-addon:global');
+
+// Remove all sets from this provider (useful during cleanup)
+emotes.removeDefaultSet('my-addon');
+```
+
+<ParamField path="provider" type="string" required>
+  The provider key.
+</ParamField>
+<ParamField path="set_id" type="string">
+  The specific set ID to remove. Omit to remove all sets under `provider`.
+</ParamField>
+
+### `addSubSet(provider, set_id, data?)`
+
+Adds a set to the "subscriber" pool — visible in the emote picker as browseable but not active for all users. Useful for exposing channel emotes that viewers might want to reference.
+
+### `removeSubSet(provider, set_id)`
+
+Removes a set from the subscriber pool.
+
+---
+
+## Room-level emote access
+
+### `getRoom(room_id, room_login?, no_create?)`
+
+Convenience wrapper that resolves the underlying `chat.getRoom`. Returns a `Room` object whose `emote_sets` field reflects the emotes active in that channel.
+
+```javascript
+const room = emotes.parent.getRoom('12345', 'streamer');
+if (room) {
+  room.addSet('my-addon', 'my-addon:channel-12345', channelSetData);
+}
+```
+
+<Note>
+Add-on code should call `chat.getRoom(...)` directly. The `emotes` module exposes room state through the `chat` module's `getRoom` accessor.
+</Note>
+
+---
+
+## MODIFIER_FLAGS
+
+`MODIFIER_FLAGS` is a bitmask enum that describes visual effects an emote can carry. The values are bit positions generated with `make_enum_flags`.
+
+```javascript
+import { MODIFIER_FLAGS } from 'src/modules/chat/emotes.js';
+// or, from an add-on:
+const { ModifierFlags } = this.resolve('chat.emotes');
+```
+
+| Flag | Bit value | Visual effect |
+|---|---|---|
+| `Hidden` | `1` | Emote is hidden (shown as `???`) |
+| `FlipX` | `2` | Mirror horizontally |
+| `FlipY` | `4` | Mirror vertically |
+| `GrowX` | `8` | Stretch horizontally |
+| `Slide` | `16` | Slide animation |
+| `Appear` | `32` | Appear animation (bounce-in) |
+| `Leave` | `64` | Leave animation (bounce-out) |
+| `Rotate` | `128` | Continuous 360° rotation |
+| `Rotate90` | `256` | 90° rotation |
+| `Greyscale` | `512` | Greyscale filter |
+| `Sepia` | `1024` | Sepia filter |
+| `Rainbow` | `2048` | Rainbow hue-rotation animation |
+| `HyperRed` | `4096` | High-contrast red filter |
+| `Shake` | `8192` | Hyper Shake animation |
+| `Cursed` | `16384` | Cursed / photocopy greyscale filter |
+| `Jam` | `32768` | Jam dance animation |
+| `Bounce` | `65536` | Bounce animation |
+| `NoSpace` | `131072` | Suppress leading space before emote |
+
+Flags are bitwise-ORed together to combine multiple effects:
+
+```javascript
+const { ModifierFlags } = this.resolve('chat.emotes');
+const flags = ModifierFlags.FlipX | ModifierFlags.Rainbow; // flip + rainbow
+```
+
+---
+
+## Emote filters
+
+Emote filters allow add-ons to hide specific emotes from rendering (e.g. NSFW filtering). Filters run against every emote in every loaded set.
+
+### `addFilter(filter)`
+
+```javascript
+emotes.addFilter({
+  type: 'my-addon-filter',
+  priority: 0,
+
+  // Return true to hide the emote
+  test(emote, set, set_id) {
+    return emote.name.includes('NSFW');
+  }
+});
+```
+
+### `removeFilter(filter)`
+
+Unregisters a filter by its `type` string or filter object.
+
+---
+
+## Key events
+
+Listen for these events on the `emotes` module.
+
+| Event | Arguments | Description |
+|---|---|---|
+| `:loaded` | `set_id: string, set: EmoteSet` | Fired after an emote set is loaded or updated. |
+| `:unloaded` | `set_id: string, set: EmoteSet` | Fired when an emote set is unloaded from memory. |
+| `:update-default-sets` | `provider, set_id, added: boolean` | Default set was added or removed. |
+| `:update-sub-sets` | `provider, set_id, added: boolean` | Sub set was added or removed. |
+| `:update-room-sets` | `room, provider, set_id, added: boolean` | Room-level set was added or removed. |
+| `:update-user-sets` | `user, provider, set_id, added: boolean` | User-level set was added or removed. |
+| `:update-priorities` | `sortFn` | Emitted when emote source priority order changes. |
+| `:update-effects` | — | Emitted when active modifier effect settings change. |
+| `chat.emotes:click` | `FFZEvent` | Fired when a rendered emote is clicked. |

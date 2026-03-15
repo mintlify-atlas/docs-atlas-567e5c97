@@ -1,0 +1,259 @@
+---
+title: "Chat Integration"
+description: "Hook into the FFZ chat rendering pipeline to add tokenizers, rich content providers, and custom behavior."
+---
+
+The `Chat` module (`src/modules/chat/index.js`) is the central hub for all chat rendering. It manages tokenization, badge assignment, emote rendering, and event routing. Add-ons access it via `this.resolve('chat')` or `this.inject('chat')`.
+
+## Accessing the Chat Module
+
+```typescript
+import { Addon } from 'utilities/addon';
+
+export default class MyAddon extends Addon {
+  constructor(name, parent) {
+    super(name, parent);
+    // Declare a hard dependency: chat must be enabled before this addon.
+    this.inject('chat');
+  }
+
+  onEnable() {
+    // this.chat is now the Chat module (proxied for addon ownership).
+    this.log.info('Chat module:', this.chat);
+  }
+}
+```
+
+Alternatively, resolve it without a dependency if you need it optionally:
+
+```typescript
+const chat = this.resolve('chat');
+if ( chat ) {
+  // use chat
+}
+```
+
+## Chat Tokenizers
+
+Tokenizers transform raw chat message text into a stream of typed tokens for rendering. They are the primary way to inject custom UI elements into chat messages.
+
+### How Tokenization Works
+
+When a message is rendered, FFZ calls `chat.tokenizeString()` which iterates through all registered tokenizers in priority order. Each tokenizer receives the current `tokens` array and may replace, split, or annotate tokens:
+
+```typescript
+// From src/modules/chat/index.js
+tokenizeString(message, msg, user, haltable = false) {
+  let tokens = [{type: 'text', text: message}];
+
+  for(const tokenizer of this.__tokenizers) {
+    if ( ! tokenizer.process )
+      continue;
+    // ... tokenizer.process(tokens, ...) is called
+  }
+
+  return tokens;
+}
+```
+
+### Registering a Tokenizer
+
+A tokenizer is a plain object with at minimum a `type` string and a `process` function:
+
+```javascript
+const myTokenizer = {
+  type: 'my-addon--highlight',
+  priority: 10, // higher = runs earlier; default 0
+
+  process(tokens, msg, chat) {
+    const out = [];
+
+    for(const token of tokens) {
+      if ( token.type !== 'text' ) {
+        out.push(token);
+        continue;
+      }
+
+      // Replace every occurrence of 'Hello' with a highlighted token.
+      const parts = token.text.split('Hello');
+      for(let i = 0; i < parts.length; i++) {
+        if ( parts[i] )
+          out.push({ type: 'text', text: parts[i] });
+        if ( i < parts.length - 1 )
+          out.push({ type: 'my-addon--highlight', text: 'Hello' });
+      }
+    }
+
+    return out;
+  }
+};
+
+// Register inside onEnable():
+this.chat.addTokenizer(myTokenizer);
+```
+
+When called through the add-on proxy, `addTokenizer` automatically sets `tokenizer.__source = addon_id`, allowing FFZ to clean up your tokenizer when the add-on is unloaded:
+
+```typescript
+// From src/modules/chat/index.js (getAddonProxy)
+overrides.addTokenizer = tokenizer => {
+  if ( tokenizer )
+    tokenizer.__source = addon_id;
+
+  return this.addTokenizer(tokenizer);
+}
+```
+
+### Tokenizer with a Tooltip
+
+If your tokenizer produces custom tokens, you can attach a tooltip by setting `tooltip` on the tokenizer object:
+
+```javascript
+const myTokenizer = {
+  type: 'my-addon--special',
+  priority: 5,
+
+  process(tokens, msg, chat) {
+    // ... return modified tokens
+  },
+
+  // `this` inside tooltip is bound to the Chat module.
+  tooltip(target, tip) {
+    return `Special token: ${target.dataset.value}`;
+  }
+};
+```
+
+FFZ registers `tooltip` functions into its `tooltips.types` map using the tokenizer's `type`.
+
+### Removing a Tokenizer
+
+```typescript
+onDisable() {
+  this.chat.removeTokenizer('my-addon--highlight');
+}
+```
+
+<Note>
+  You do not need to remove tokenizers in `onDisable()` — FFZ's `addon:fully-unload` handler cleans up everything owned by your add-on ID automatically. However, calling `removeTokenizer()` explicitly is correct practice if you want to stop using a tokenizer before the add-on is fully unloaded.
+</Note>
+
+## Rich Content Providers
+
+Rich providers turn link tokens into rendered cards, previews, or other rich content below a message.
+
+```javascript
+const myRichProvider = {
+  type: 'my-addon--cards',
+  priority: 0,
+
+  // Return truthy if this provider handles the given URL.
+  test(url) {
+    return /^https:\/\/example\.com\//.test(url);
+  },
+
+  // Return the rich content data for the URL.
+  async process(match, data) {
+    const response = await fetch(`https://api.example.com/card?url=${match}`);
+    return response.json();
+  }
+};
+
+this.chat.addRichProvider(myRichProvider);
+```
+
+## Link Providers
+
+Link providers pre-process links before they are rendered, enabling custom link cards injected via PubSub:
+
+```javascript
+const myLinkProvider = {
+  type: 'my-addon--links',
+
+  test(url) {
+    return /example\.com/.test(url) && url;
+  },
+
+  receive(match, data) {
+    // Optionally transform server-pushed data.
+    return data;
+  },
+
+  process(match, data) {
+    return { title: data.title, image: data.image };
+  }
+};
+
+this.chat.addLinkProvider(myLinkProvider);
+```
+
+## Chat Events
+
+The `Chat` module and its sub-modules emit events on the FFZ event bus. Subscribe with `this.on()`:
+
+```typescript
+onEnable() {
+  // Fires whenever the effective token list for displayed messages changes.
+  this.on('chat:update-line-tokens', this.retokenize, this);
+
+  // Fires when a user clicks a link in chat (unless ctrl/shift held).
+  this.on('chat:click-link', event => {
+    if ( event.url.includes('example.com') ) {
+      event.preventDefault();
+      this.openCard(event.url);
+    }
+  }, this);
+
+  // Fires when a user clicks an emote.
+  this.on('chat.emotes:click', event => {
+    this.log.info('Emote clicked:', event.id, event.provider);
+  }, this);
+}
+```
+
+### Key Chat Events
+
+| Event | Payload | Description |
+|---|---|---|
+| `chat:update-line-tokens` | — | Chat lines should be re-tokenized. |
+| `chat:click-link` | `FFZEvent` with `url` | A link was clicked. Call `event.preventDefault()` to suppress default behavior. |
+| `chat:get-messages` | `(include_chat, include_whisper, include_video, messages)` | Add message arrays to `messages` to expose them for iteration. |
+| `chat.emotes:click` | `FFZEvent` with emote info | An emote was clicked. |
+| `chat:reload-data` | `flags?` | Chat data (emotes, badges) should be reloaded. |
+
+## Room and User Objects
+
+`chat.getRoom(id, login)` and `chat.getUser(id, login)` return `Room` and `User` objects that hold per-room and per-user state including emote sets and badges:
+
+```typescript
+const room = this.chat.getRoom(null, 'channelname');
+if ( room ) {
+  // Add an emote set from your provider to this room.
+  room.addSet('my-addon', 'my-addon--set-id-123');
+}
+
+const user = this.chat.getUser('12345', 'username');
+if ( user ) {
+  // Add a badge to this user.
+  user.addBadge('my-addon', 'my-addon--badge-id-1');
+}
+```
+
+<Warning>
+  Always include your add-on ID in provider strings and set/badge IDs when calling room and user methods. The dev proxy logs a warning if you do not.
+</Warning>
+
+## Tab Command Prefixes
+
+Register custom command prefix characters so your commands appear in the tab-completion list:
+
+```typescript
+onEnable() {
+  // Register '!' as a command prefix for this add-on.
+  this.chat.addTabCommandPrefix('!');
+}
+
+onDisable() {
+  this.chat.removeTabCommandPrefix('!');
+}
+```

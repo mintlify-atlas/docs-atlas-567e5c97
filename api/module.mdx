@@ -1,0 +1,528 @@
+---
+title: "Module"
+description: "Base class for every logical component in FrankerFaceZ, providing lifecycle management, dependency injection, and typed events."
+---
+
+`Module` is the foundation of the FrankerFaceZ component system. Every subsystem — from settings and chat to individual add-on features — is a `Module`. Modules can be loaded, unloaded, enabled, and disabled at runtime. They declare dependencies on one another, and the system resolves the correct enable order automatically.
+
+```typescript
+import Module from 'utilities/module';
+
+class MyModule extends Module<'my_module', MyEvents> {
+  async onEnable() {
+    this.log.info('enabled');
+  }
+
+  async onDisable() {
+    this.log.info('disabled');
+  }
+}
+```
+
+## Class signature
+
+```typescript
+export class Module<
+  TNamespace extends string = '',
+  TEventMap extends EventMap = {},
+  TExtraEvents extends EventMap = KnownEvents,
+  TActualEvents extends EventMap = TExtraEvents
+    & NamespacedEvents<TNamespace, TEventMap>
+    & NamespacedEvents<TNamespace, ModuleEvents>
+> extends EventEmitter<TNamespace, TActualEvents>
+```
+
+### Type parameters
+
+<ResponseField name="TNamespace" type="string" default="''">
+  The absolute dot-separated path where this module lives in the module tree, e.g. `'chat.emotes'`. Supplying this enables relative event keys to be checked by TypeScript.
+</ResponseField>
+
+<ResponseField name="TEventMap" type="EventMap" default="{}">
+  Events that this module emits under its own namespace. Import and merge event maps from other modules you plan to listen on.
+</ResponseField>
+
+## Constructor
+
+```typescript
+constructor(name?: string, parent?: GenericModule, addon?: boolean)
+```
+
+<ParamField path="name" type="string">
+  The module's local name within its parent. Used to build the full path and to derive a logger name. If omitted, the name is taken from the class name.
+</ParamField>
+
+<ParamField path="parent" type="GenericModule">
+  The parent module. When provided, this module is automatically added to the parent's `children` map and shares the parent's module registry.
+</ParamField>
+
+<ParamField path="addon" type="boolean">
+  Internal flag set to `true` by the `Addon` subclass constructor. Causes the module to extract and store the add-on ID from its path.
+</ParamField>
+
+## State enums
+
+### `State`
+
+Represents the enable/disable lifecycle of a module.
+
+| Value | Numeric | Meaning |
+|---|---|---|
+| `State.Disabled` | `0` | The module is not active. |
+| `State.Enabling` | `1` | `onEnable()` is running or dependencies are being enabled. |
+| `State.Enabled` | `2` | The module is fully active. |
+| `State.Disabling` | `3` | `onDisable()` is running or dependents are being disabled. |
+
+### `LoadState`
+
+Represents the load/unload lifecycle of a module.
+
+| Value | Numeric | Meaning |
+|---|---|---|
+| `LoadState.Unloaded` | `0` | The module has not been loaded. |
+| `LoadState.Loading` | `1` | `onLoad()` is running or load dependencies are being enabled. |
+| `LoadState.Loaded` | `2` | The module is loaded and ready to be enabled. |
+| `LoadState.Unloading` | `3` | `onUnload()` is running or load dependents are being unloaded. |
+
+## Properties
+
+<ResponseField name="name" type="string">
+  The local name of this module (the last segment of its path). Set during construction.
+</ResponseField>
+
+<ResponseField name="log" type="Logger">
+  A `Logger` instance scoped to this module. Lazily resolved from the parent's logger on first access. Can be replaced by assigning directly.
+</ResponseField>
+
+<ResponseField name="state" type="State">
+  Read-only. The current `State` of this module.
+</ResponseField>
+
+<ResponseField name="load_state" type="LoadState">
+  Read-only. The current `LoadState` of this module.
+</ResponseField>
+
+<ResponseField name="enabled" type="boolean">
+  `true` when `state === State.Enabled`.
+</ResponseField>
+
+<ResponseField name="enabling" type="boolean">
+  `true` when `state === State.Enabling`.
+</ResponseField>
+
+<ResponseField name="loaded" type="boolean">
+  `true` when `load_state === LoadState.Loaded`.
+</ResponseField>
+
+<ResponseField name="loading" type="boolean">
+  `true` when `load_state === LoadState.Loading`.
+</ResponseField>
+
+<ResponseField name="should_enable" type="boolean | undefined">
+  Optional flag. When set to `true` on a direct child of `core` or `site`, `FrankerFaceZ.enableInitialModules()` will call `enable()` on this module during startup.
+</ResponseField>
+
+<ResponseField name="parent" type="GenericModule | undefined">
+  The parent module, if any.
+</ResponseField>
+
+<ResponseField name="children" type="Record<string, GenericModule>">
+  A map of immediate child modules keyed by their local name.
+</ResponseField>
+
+<ResponseField name="requires" type="string[] | undefined">
+  List of absolute module paths that must be `Enabled` before this module can be enabled. Populated automatically by `inject()`.
+</ResponseField>
+
+<ResponseField name="load_requires" type="string[] | undefined">
+  List of absolute module paths that must be `Enabled` before this module can be loaded.
+</ResponseField>
+
+<ResponseField name="addon_id" type="string | undefined">
+  If this module belongs to an add-on, the add-on's ID.
+</ResponseField>
+
+<ResponseField name="addon_root" type="GenericModule | undefined">
+  If this module belongs to an add-on, the root `Addon` module.
+</ResponseField>
+
+## Lifecycle methods
+
+All lifecycle methods are optional. If a method is not defined, the module transitions through the corresponding state immediately without waiting.
+
+### `enable()`
+
+```typescript
+enable(): Promise<void>
+```
+
+Transitions the module from `Disabled` to `Enabled`. Before calling `onEnable()`, the system:
+
+1. Loads the module if it is not already `Loaded`.
+2. Enables all modules listed in `requires`.
+
+If the module is already `Enabled`, the returned promise resolves immediately. Calling `enable()` while the module is `Disabling` rejects the promise.
+
+### `disable()`
+
+```typescript
+disable(): Promise<void>
+```
+
+Transitions the module from `Enabled` to `Disabled`. Before calling `onDisable()`, the system disables all modules that depend on this one. Requires `onDisable` to be defined; throws `ModuleError` otherwise.
+
+### `load()`
+
+```typescript
+load(): Promise<void>
+```
+
+Transitions the module to `Loaded`. Enables all `load_requires` dependencies first. Called automatically by `enable()`.
+
+### `unload()`
+
+```typescript
+unload(): Promise<void>
+```
+
+Transitions the module back to `Unloaded`. Disables the module first if it is currently enabled. Unloads all load-dependent modules first. Requires `onUnload` to be defined if `onLoad` is defined.
+
+### `canDisable()`
+
+```typescript
+canDisable(): boolean
+```
+
+Returns `true` if the module and all of its dependents can currently be disabled.
+
+### `canUnload()`
+
+```typescript
+canUnload(): boolean
+```
+
+Returns `true` if the module and all of its load-dependents can currently be unloaded.
+
+## Lifecycle hooks
+
+Override these protected methods in a subclass to run code during lifecycle transitions.
+
+### `onLoad()`
+
+```typescript
+protected onLoad?(): void | Promise<void>
+```
+
+Called when the module is being loaded, after all `load_requires` dependencies have been enabled. The module remains in `Loading` state until this method's promise resolves. If not defined, the module is considered immediately `Loaded` (assuming no `load_requires`).
+
+### `onUnload()`
+
+```typescript
+protected onUnload?(): void | Promise<void>
+```
+
+Called when the module is being unloaded. Must be defined if `onLoad` is defined, otherwise `unload()` throws.
+
+### `onEnable()`
+
+```typescript
+protected onEnable?(): void | Promise<void>
+```
+
+Called when the module is being enabled, after all `requires` dependencies have been enabled and the module is `Loaded`. The module remains in `Enabling` state until this method's promise resolves.
+
+### `onDisable()`
+
+```typescript
+protected onDisable?(): void | Promise<void>
+```
+
+Called when the module is being disabled, after all dependent modules have been disabled. Must be defined if `onEnable` is defined, otherwise `disable()` throws.
+
+<Warning>
+  If you define `onEnable`, you must also define `onDisable`. If you define `onLoad`, you must also define `onUnload`. Attempting to disable or unload a module that lacks the corresponding hook throws a `ModuleError`.
+</Warning>
+
+## Dependency injection
+
+### `inject()`
+
+```typescript
+inject(
+  name: string | Module | null,
+  module?: GenericModule | typeof Module | null,
+  require?: boolean
+): GenericModule | null
+```
+
+Declares a dependency on another module and assigns it as a property on `this`. The last segment of the path becomes the property name.
+
+<ParamField path="name" type="string | Module | null">
+  The path of the module to inject (e.g. `'chat'`, `'chat.emotes'`), or a `Module` instance, or a `Module` subclass constructor. When a path is given, the last segment becomes the property name (`this.emotes`).
+</ParamField>
+
+<ParamField path="module" type="GenericModule | typeof Module | null">
+  Optional. A `Module` instance or subclass to register and inject. When provided, the module is registered under `name` if it does not already exist.
+</ParamField>
+
+<ParamField path="require" type="boolean" default="true">
+  When `true` (default), adds the dependency to `this.requires` so the system enables it before `onEnable()` fires.
+</ParamField>
+
+```typescript
+constructor(name, parent) {
+  super(name, parent);
+  this.inject('chat');         // this.chat → Chat module, added to requires
+  this.inject('chat.emotes'); // this.emotes → Emotes module, added to requires
+}
+```
+
+### `injectAs()`
+
+```typescript
+injectAs(
+  variable: string,
+  name: string | Module | null,
+  module?: GenericModule | typeof Module | null,
+  require?: boolean
+): GenericModule | null
+```
+
+Same as `inject()`, but stores the result under `variable` instead of deriving the property name from the path. Useful when the path segment would clash with another property.
+
+```typescript
+this.injectAs('emoteModule', 'chat.emotes');
+// this.emoteModule → Emotes module
+```
+
+### `register()`
+
+```typescript
+register(
+  name: string,
+  module: typeof Module,
+  inject_reference?: boolean
+): GenericModule
+```
+
+Registers a new module class as a child without declaring it as a required dependency. The module is instantiated immediately and added to the shared module registry.
+
+<ParamField path="name" type="string">
+  Local name for the new module. Becomes the last segment of the module's full path.
+</ParamField>
+
+<ParamField path="module" type="typeof Module">
+  The `Module` subclass constructor to instantiate.
+</ParamField>
+
+<ParamField path="inject_reference" type="boolean" default="false">
+  When `true`, also assigns the new instance as `this[name]`.
+</ParamField>
+
+### `resolve()`
+
+```typescript
+resolve<TPath extends string>(name: TPath): ModuleMap[TPath] | GenericModule | null
+```
+
+Looks up a module by path and returns it, or `null` if not found. If the calling module is part of an add-on and the target module defines `getAddonProxy()`, the proxy is returned instead of the raw module.
+
+```typescript
+const chat = this.resolve('chat');
+if (chat) {
+  // use chat
+}
+```
+
+### `hasModule()`
+
+```typescript
+hasModule(name: string): boolean
+```
+
+Returns `true` if a module instance (not a pending placeholder) is registered at the given path.
+
+## Events
+
+`Module` extends `EventEmitter` and defaults `ctx` to `this` when none is provided.
+
+### `on()`
+
+```typescript
+on(
+  event: K,
+  fn: EventListener,
+  ctx?: any,
+  priority?: number,
+  prepend?: boolean
+): this
+```
+
+<ParamField path="event" type="string">The event key to subscribe to.</ParamField>
+<ParamField path="fn" type="EventListener">The callback function.</ParamField>
+<ParamField path="ctx" type="any" default="this">Execution context for the callback. Defaults to the module instance.</ParamField>
+<ParamField path="priority" type="number">Optional listener priority.</ParamField>
+<ParamField path="prepend" type="boolean" default="false">Insert the listener before existing ones.</ParamField>
+
+### `off()`
+
+```typescript
+off(event?: K, fn?: EventListener, ctx?: any): this
+```
+
+Removes a previously registered listener. If called with no arguments, removes all listeners. Defaults `ctx` to `this`.
+
+### `emit()`
+
+```typescript
+emit(event: K, ...args: EventArgs): boolean
+```
+
+Fires all listeners registered for `event` with the supplied arguments. Inherited from `EventEmitter`.
+
+### `once()`
+
+```typescript
+once(
+  event: K,
+  fn: EventListener,
+  ctx?: any,
+  priority?: number,
+  prepend?: boolean
+): this
+```
+
+Registers a listener that fires exactly once, then removes itself. Defaults `ctx` to `this`.
+
+### `many()`
+
+```typescript
+many(
+  event: K,
+  ttl: number,
+  fn: EventListener,
+  ctx?: any,
+  priority?: number,
+  prepend?: boolean
+): this
+```
+
+<ParamField path="ttl" type="number">Number of times the listener should fire before being removed.</ParamField>
+
+Registers a listener that fires at most `ttl` times. Defaults `ctx` to `this`.
+
+### `waitFor()`
+
+```typescript
+waitFor(
+  event: K,
+  ctx?: any,
+  priority?: number,
+  prepend?: boolean
+): Promise<EventArgs>
+```
+
+Returns a `Promise` that resolves with the event's argument array the next time `event` fires. Defaults `ctx` to `this`.
+
+```typescript
+const [emote] = await this.waitFor('chat.emotes:updated');
+```
+
+## Built-in module events
+
+Every module emits these events automatically:
+
+| Event | Payload | Fired when |
+|---|---|---|
+| `:registered` | `module: GenericModule` | The module is first registered in the tree. |
+| `:loaded` | `module: GenericModule` | The module finishes loading. |
+| `:unloaded` | `module: GenericModule` | The module finishes unloading. |
+| `:enabled` | `module: GenericModule` | The module finishes enabling. |
+| `:disabled` | `module: GenericModule` | The module finishes disabling. |
+
+## Loading modules from webpack context
+
+### `loadFromContext()`
+
+```typescript
+async loadFromContext(
+  ctx: __WebpackModuleApi.RequireContext,
+  log?: Logger
+): Promise<Record<string, GenericModule>>
+```
+
+Scans a webpack `require.context` for module files, registers each discovered module as a child of `this`, and returns a map of all registered modules. Each file's default export or `module` named export is used.
+
+<ParamField path="ctx" type="__WebpackModuleApi.RequireContext">
+  A webpack require context, e.g. `require.context('./modules', true, /\.js$/)`.
+</ParamField>
+
+<ParamField path="log" type="Logger">
+  Logger to use for warnings. Defaults to `this.log`.
+</ParamField>
+
+```typescript
+async onEnable() {
+  await this.loadFromContext(
+    require.context('./modules', true, /\.js$/)
+  );
+}
+```
+
+## Static methods
+
+### `Module.buildAddonProxy()`
+
+```typescript
+static buildAddonProxy<TObj extends object, TNoProxy extends boolean = false>(
+  accessor: Module | null,
+  thing: TObj,
+  name: string,
+  overrides: Record<string, any>,
+  access_warnings?: Record<string, string | boolean>,
+  no_proxy?: TNoProxy
+): TNoProxy extends true ? ProxyHandler<TObj> : TObj
+```
+
+Builds a `Proxy` (or a raw `ProxyHandler` when `no_proxy` is `true`) around `thing` that:
+
+- Returns values from `overrides` before falling through to the real object.
+- Logs a warning via `accessor.log` for any property listed in `access_warnings`.
+- Ensures any `Module` instances returned through property access are themselves proxied via `accessor.resolve()`.
+
+<ParamField path="accessor" type="Module | null">The module that will own the proxy. Used for logging and nested module resolution.</ParamField>
+<ParamField path="thing" type="TObj">The object to wrap.</ParamField>
+<ParamField path="name" type="string">Display name used in warning messages.</ParamField>
+<ParamField path="overrides" type="Record<string, any>">Property overrides. These take precedence over the real object's properties.</ParamField>
+<ParamField path="access_warnings" type="Record<string, string | boolean>">Map of property names to warning messages. A `true` value uses a generic warning.</ParamField>
+<ParamField path="no_proxy" type="boolean" default="false">When `true`, returns the `ProxyHandler` object instead of a `Proxy`.</ParamField>
+
+Modules use this internally via `getAddonProxy()` to provide safe, scoped access to their API for add-on code:
+
+```typescript
+getAddonProxy(addon_id, addon, root, caller) {
+  return Module.buildAddonProxy(caller, this, 'MyModule', {
+    // Override a property for add-ons
+    dangerousInternalField: undefined,
+  }, {
+    // Warn when an add-on touches a deprecated property
+    oldMethod: 'Use newMethod() instead.',
+  });
+}
+```
+
+## Error classes
+
+### `ModuleError`
+
+A subclass of `Error` thrown when a module lifecycle operation fails, for example attempting to disable a module that has no `onDisable` hook, or trying to enable a module that is currently being disabled.
+
+### `CyclicDependencyError`
+
+A subclass of `ModuleError` thrown when enabling, disabling, loading, or unloading a module would create a circular dependency. The `modules` property contains the ordered list of `GenericModule` instances that form the cycle.
+
+```typescript
+export class CyclicDependencyError extends ModuleError {
+  modules: GenericModule[];
+}
+```

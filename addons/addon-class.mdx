@@ -1,0 +1,267 @@
+---
+title: "The Addon Class"
+description: "Full reference for the Addon and Module base classes, including lifecycle hooks, dependency injection, and multi-module add-ons."
+---
+
+Every FFZ add-on has a **root module** that extends `Addon`. For add-ons with multiple sub-modules, those sub-modules extend `Module` directly.
+
+## Class Hierarchy
+
+```
+EventEmitter
+  └── Module          (utilities/module.ts)
+        └── Addon     (utilities/addon.ts)
+```
+
+## The `Addon` Class
+
+```typescript
+// src/utilities/addon.ts
+export class Addon<TPath extends string = '', TEventMap extends ModuleEvents = ModuleEvents>
+  extends Module<TPath, TEventMap> {
+
+  static info?: AddonInfo;
+  static version: string;
+
+  // Automatically injected dependencies
+  i18n: TranslationManager;
+  settings: SettingsManager;
+
+  constructor(name?: string, parent?: GenericModule) {
+    super(name, parent, true);
+    this.inject('i18n');
+    this.inject('settings');
+  }
+
+  static register(id?: string | AddonInfo, info?: AddonInfo, version?: string): void;
+}
+```
+
+### Static Properties
+
+<ParamField path="Addon.info" type="AddonInfo" optional>
+  The add-on manifest. Merged into the `AddonManager`'s registry when `register()` is called. See the [`AddonInfo` type](#addoninfo-type) below.
+</ParamField>
+
+<ParamField path="Addon.version" type="string" optional>
+  A version string that overrides `AddonInfo.version`. Set automatically by `register()` when a `version` argument is provided.
+</ParamField>
+
+### Auto-Injected Dependencies
+
+The `Addon` constructor calls `this.inject('i18n')` and `this.inject('settings')` automatically. After `onEnable()` fires these are fully initialized module references:
+
+| Property | Module | Purpose |
+|---|---|---|
+| `this.i18n` | `TranslationManager` | Translate strings with ICU format |
+| `this.settings` | `SettingsManager` (proxied) | Register and read settings |
+
+### The `log` Property
+
+Inherited from `Module`. Returns a `Logger` instance scoped to this module's path:
+
+```typescript
+this.log.info('add-on enabled');
+this.log.warn('something unexpected happened');
+this.log.error('an error occurred', err);
+```
+
+The logger is lazily resolved via the parent module's logger:
+
+```typescript
+// From src/utilities/module.ts
+get log(): Logger {
+  if ( ! this.__log )
+    this.__log = this.parent && (this.parent as GenericModule).log?.get?.(this.name);
+  return this.__log as Logger;
+}
+```
+
+## `AddonInfo` Type
+
+Defined in `src/utilities/types.ts`:
+
+<ParamField path="id" type="string" required>
+  Unique identifier for the add-on. Used as the path suffix in the module tree (`addon.<id>`), as a prefix for settings keys, and as an ownership marker for emote sets and badges.
+</ParamField>
+
+<ParamField path="name" type="string" required>
+  Human-readable display name (English).
+</ParamField>
+
+<ParamField path="version" type="string" required>
+  Semantic version string.
+</ParamField>
+
+<ParamField path="author" type="string" required>
+  Author's name.
+</ParamField>
+
+<ParamField path="description" type="string" required>
+  Markdown-supported description shown in the Add-Ons panel.
+</ParamField>
+
+<ParamField path="short_name" type="string" optional>
+  Shortened display name used in compact UI contexts.
+</ParamField>
+
+<ParamField path="website" type="string" optional>
+  If set, a **Website** button is shown for the add-on in the panel.
+</ParamField>
+
+<ParamField path="settings" type="string" optional>
+  A settings path key. If set, a **Settings** button links directly to that settings page.
+</ParamField>
+
+<ParamField path="targets" type="string[]" optional>
+  List of FFZ flavors this add-on supports. Valid values: `'main'`, `'clips'`, `'player'`. Defaults to `['main']`.
+</ParamField>
+
+<ParamField path="requires" type="string[]" optional>
+  Add-on IDs that must be enabled before this add-on can be enabled.
+</ParamField>
+
+<ParamField path="load_events" type="string[]" optional>
+  Load tracker event names that this add-on will hold while loading, delaying dependent systems.
+</ParamField>
+
+## Lifecycle Hooks
+
+All lifecycle methods are **optional**. If a method is not defined, the module transitions through that state immediately.
+
+```typescript
+export class MyAddon extends Addon {
+
+  // Called before onEnable. Use for deferred setup that may be async.
+  async onLoad(): Promise<void> { ... }
+
+  // Called when the add-on is enabled.
+  async onEnable(): Promise<void> { ... }
+
+  // Called when the add-on is disabled.
+  // Required if onEnable is defined.
+  async onDisable(): Promise<void> { ... }
+
+  // Called when the add-on is fully unloaded.
+  // Required if onLoad is defined.
+  async onUnload(): Promise<void> { ... }
+}
+```
+
+### State Machine
+
+The `Module` class maintains two independent state dimensions:
+
+| Load State | Meaning |
+|---|---|
+| `Unloaded` | Not yet loaded |
+| `Loading` | `onLoad()` is running |
+| `Loaded` | Ready |
+| `Unloading` | `onUnload()` is running |
+
+| Enable State | Meaning |
+|---|---|
+| `Disabled` | Inactive |
+| `Enabling` | `onEnable()` is running |
+| `Enabled` | Active |
+| `Disabling` | `onDisable()` is running |
+
+Properties `module.loaded`, `module.loading`, `module.enabled`, and `module.enabling` reflect these states.
+
+## Declaring Dependencies with `inject()`
+
+Use `inject()` inside the constructor (or before enable) to declare that your module depends on another module. FFZ ensures the required module is enabled before calling your `onEnable()`:
+
+```typescript
+constructor(name, parent) {
+  super(name, parent);
+  // Inject by path string — the property name becomes the last path segment
+  this.inject('chat');          // this.chat = <Chat module>
+  this.inject('chat.emotes');   // this.emotes = <Emotes module>
+}
+```
+
+When the module is part of an add-on, `resolve()` and `inject()` automatically apply any `getAddonProxy()` that the target module defines. This means calls to `this.settings.add()` are automatically tagged with your add-on ID.
+
+### `resolve()` for Optional Access
+
+To access a module without creating a hard dependency:
+
+```typescript
+const chat = this.resolve('chat');
+if ( chat ) {
+  // use chat
+}
+```
+
+## `register()` Static Method
+
+Call `Addon.register()` exactly once, at module evaluation time:
+
+```typescript
+// Minimal call — ID is derived from the class name ('MyAddon' → 'my_addon')
+MyAddon.register();
+
+// Explicit ID and manifest:
+MyAddon.register('my-addon', {
+  id: 'my-addon',
+  name: 'My Add-On',
+  // ...
+});
+
+// Provide the manifest via static info:
+class MyAddon extends Addon {
+  static info = { id: 'my-addon', ... };
+}
+MyAddon.register(); // reads MyAddon.info automatically
+```
+
+## Multi-Module Add-Ons with `loadFromContext()`
+
+For add-ons with many sub-modules, organize them in a directory and use webpack's `require.context()` with `loadFromContext()`:
+
+```typescript
+import { Addon } from 'utilities/addon';
+
+export default class MyAddon extends Addon {
+  static info = { id: 'my-addon', /* ... */ };
+
+  async onEnable() {
+    // Load all modules from the ./modules/ directory.
+    // Each file should export a Module subclass as `default` or `module`.
+    await this.loadFromContext(
+      require.context('./modules', true, /\.js$/)
+    );
+  }
+}
+
+MyAddon.register();
+```
+
+`loadFromContext()` registers and injects each discovered module onto the root module, then returns a map of `name → module` for any further setup.
+
+```typescript
+// From src/utilities/module.ts
+async loadFromContext(ctx: __WebpackModuleApi.RequireContext, log?: Logger) {
+  log = log ?? this.log;
+  const added: Record<string, GenericModule> = {};
+  for(const raw_path of ctx.keys()) {
+    const raw_module = await ctx(raw_path),
+      module = raw_module.module || raw_module.default,
+      // ... derive name from file path ...
+      name = ...;
+
+    try {
+      added[name] = this.register(name, module);
+    } catch(err) {
+      if ( log && err instanceof Error )
+        log.warn(err, `Skipping ${raw_path}`);
+    }
+  }
+  return added;
+}
+```
+
+<Note>
+  The `populate()` method is a deprecated alias for `loadFromContext()`. Use `loadFromContext()` in all new code.
+</Note>

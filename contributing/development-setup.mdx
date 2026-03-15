@@ -1,0 +1,108 @@
+---
+title: "Development Setup"
+description: "Get your local development environment ready to work on FrankerFaceZ."
+---
+
+## Prerequisites
+
+Before you begin, make sure you have the following installed:
+
+- **Node.js** — required to run the build toolchain and dev server
+- **pnpm** — the package manager used by this project ([pnpm.io](https://pnpm.io/))
+
+## Getting Started
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/FrankerFaceZ/FrankerFaceZ.git
+    cd FrankerFaceZ
+    ```
+  </Step>
+
+  <Step title="Install dependencies">
+    Run `pnpm install` inside the repository directory to install all development and runtime dependencies.
+
+    ```bash
+    pnpm install
+    ```
+  </Step>
+
+  <Step title="Start the development server">
+    Use `pnpm start` to launch the webpack-dev-server. It watches source files for changes and rebuilds automatically.
+
+    ```bash
+    pnpm start
+    ```
+
+    The server listens on port **8000** and serves local development copies of files, falling back to the CDN (`cdn2.frankerfacez.com`) when a local copy is not present.
+
+    <Warning>
+      The development server uses `webpack-dev-server` internally, which self-signs a certificate for HTTPS. You must accept the self-signed certificate for `localhost` in your browser before assets will load.
+    </Warning>
+  </Step>
+
+  <Step title="Switch to the userscript version">
+    The userscript version of FrankerFaceZ is designed to load from your local development server. Switch to the userscript version for development so your local builds are served to the page.
+  </Step>
+
+  <Step title="Enable debug mode">
+    Open your browser's developer console on Twitch and run the following to point FrankerFaceZ at your local server:
+
+    ```javascript
+    localStorage.ffzDebugMode = true;
+    ```
+
+    Reload the page after setting this value.
+  </Step>
+</Steps>
+
+## Editing the Icon Font
+
+The project ships a custom icon font managed through [Fontello](https://fontello.com/). Use the `pnpm font` command to open a Fontello editing session:
+
+```bash
+pnpm font
+```
+
+This creates a new Fontello session (if one does not already exist) and opens your default browser to the Fontello editor.
+
+<Tabs>
+  <Tab title="With dev server running">
+    When `pnpm start` is active, clicking Fontello's **Export** button will automatically save font changes back to the project.
+  </Tab>
+  <Tab title="Without dev server">
+    Download your changes manually by running:
+
+    ```bash
+    pnpm font:save
+    ```
+  </Tab>
+</Tabs>
+
+## Editor Configuration
+
+The repository includes an `.editorconfig` file. Make sure your editor respects it — specifically:
+
+- **Indentation:** tabs (width 4)
+- **Line endings:** LF (`\n`)
+- **Final newline:** inserted automatically
+- **Trailing whitespace:** trimmed
+
+<Note>
+  YAML files (`.yaml` / `.yml`) are an exception and use 2-space indentation.
+</Note>
+
+### Visual Studio Code
+
+Install the [ESLint extension](https://marketplace.visualstudio.com/items?itemName=dbaeumer.vscode-eslint) and add the following to your workspace settings to enable linting for all relevant file types:
+
+```json
+{
+	"eslint.validate": [
+		"javascript",
+		"javascriptreact",
+		"vue"
+	]
+}
+```

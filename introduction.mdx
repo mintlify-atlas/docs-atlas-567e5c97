@@ -1,0 +1,83 @@
+---
+title: "Introduction"
+description: "FrankerFaceZ is a Twitch enhancement suite browser extension and userscript that adds custom emotes, badges, chat improvements, player enhancements, theming, and a powerful add-on framework."
+---
+
+FrankerFaceZ (FFZ) is a browser extension and userscript that enhances the Twitch experience. Originally built around custom emotes, it has grown into a full-featured platform with a module system that both powers FFZ itself and is available to third-party add-on developers.
+
+## Key features
+
+- **Custom emotes** — channel and global emote sets with animation and modifier support
+- **Custom badges** — per-channel and global badges with flexible rendering
+- **Chat enhancements** — rich content rendering, link cards, viewer cards, and advanced message tokenization
+- **Player improvements** — theater mode, player controls, and customization options
+- **Theming** — full CSS customization with live preview
+- **Add-on framework** — a module and settings API for community-built extensions, loaded and managed from within FFZ
+
+## How it works
+
+FFZ is structured around a hierarchical **module system**. Each feature area — emotes, badges, chat, the add-on manager, translations — is implemented as a `Module` subclass. Modules declare dependencies on each other, and the system loads and enables them in the correct order.
+
+The core `FrankerFaceZ` class (in `src/main.ts`) bootstraps the system. It injects the core modules — `SettingsManager`, `AddonManager`, `TranslationManager`, `SocketClient`, and others — then calls `discoverModules()` to find and register all feature modules under `src/modules/`.
+
+```typescript
+// src/main.ts — core module injection
+this.inject('settings', SettingsManager);
+this.inject('experiments', ExperimentManager);
+this.inject('i18n', TranslationManager);
+this.inject('socket', SocketClient);
+this.inject('pubsub', PubSubClient);
+this.inject('site', Site);
+this.inject('addons', AddonManager);
+```
+
+### Settings
+
+`SettingsManager` provides a typed key-value store for configuration. Every setting is declared with a default value and an optional UI descriptor that automatically generates controls in the FFZ settings panel. Add-ons use the same API to register their own settings.
+
+### Add-on framework
+
+Add-ons are JavaScript bundles loaded at runtime by `AddonManager`. Each add-on defines a root class that extends `Addon` (a subclass of `Module`) and calls `Addon.register()` to inject itself into the FFZ module tree. The `AddonManager` then calls `enable()` on the module, which triggers the add-on's `onEnable()` lifecycle method.
+
+```typescript
+// src/utilities/addon.ts — how an add-on registers itself
+static register(id?: string | AddonInfo, info?: AddonInfo, version?: string) {
+    // ...resolves ID and info, then:
+    ffz.register(`addon.${id}`, this);
+}
+```
+
+The `Addon` base class automatically injects the `settings` and `i18n` modules, so every add-on has access to the settings API and localization without any manual wiring.
+
+### Utilities
+
+FFZ exposes a set of utility namespaces on `window.FrankerFaceZ.utilities`:
+
+| Namespace | Contents |
+|---|---|
+| `addon` | `Addon` base class and helpers |
+| `module` | `Module` base class, `State`, `LoadState` |
+| `events` | `EventEmitter` |
+| `dom` | DOM helpers (`createElement`, etc.) |
+| `logging` | `Logger` |
+| `color` | Color parsing and manipulation |
+| `filtering` | Rule-based filtering helpers |
+| `i18n` | Translation utilities |
+| `object` | `has`, `deep_copy`, `fetchJSON`, `timeout`, and more |
+
+## Explore the documentation
+
+<CardGroup cols={2}>
+  <Card title="Quick start" icon="rocket" href="/quickstart">
+    Install FFZ, enable debug mode, and write your first add-on in minutes.
+  </Card>
+  <Card title="Installation" icon="download" href="/installation">
+    Install the browser extension, userscript, or run from source.
+  </Card>
+  <Card title="Add-on development" icon="plug" href="/addons/overview">
+    Build your own add-on using the FFZ module and settings APIs.
+  </Card>
+  <Card title="API reference" icon="code" href="/api/frankerfacez">
+    Full reference for the `FrankerFaceZ`, `Module`, and `Addon` classes.
+  </Card>
+</CardGroup>

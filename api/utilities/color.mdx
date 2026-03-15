@@ -1,0 +1,296 @@
+---
+title: "Color Utility"
+description: "Color parsing, multi-space conversion (RGBA, HSVA, HSLA, XYZA, LUVA), and contrast-aware color adjustment."
+---
+
+
+## Overview
+
+The color utility provides immutable color value objects in multiple color spaces, a unified `Color` namespace for parsing CSS color strings, and the `ColorAdjuster` class for ensuring sufficient contrast between user-supplied name colors and a given background.
+
+```typescript
+import { Color, ColorAdjuster } from 'utilities/color';
+// or, via the add-on global:
+const { Color, ColorAdjuster } = FrankerFaceZ.utilities.color;
+```
+
+---
+
+## Color Namespace
+
+The `Color` object is the main entry point for parsing and constructing colors.
+
+```typescript
+export const Color: {
+  RGBA: typeof RGBAColor;
+  HSVA: typeof HSVAColor;
+  HSLA: typeof HSLAColor;
+  XYZA: typeof XYZAColor;
+  LUVA: typeof LUVAColor;
+
+  fromCSS(input: string): RGBAColor | null;
+
+  CVDMatrix: Record<string, CVDMatrix>;
+
+  getCanvas(): HTMLCanvasElement;
+  getContext(): CanvasRenderingContext2D;
+}
+```
+
+### `Color.fromCSS(input)`
+
+Parse a CSS color string into an `RGBAColor`. Accepts hex strings (`#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`), named CSS colors, and any other value the browser's 2D canvas `fillStyle` understands.
+
+<ParamField path="input" type="string" required>
+  A CSS color string.
+</ParamField>
+
+<ResponseField name="returns" type="RGBAColor | null">
+  The parsed color, or `null` if the input is empty or invalid.
+</ResponseField>
+
+```typescript
+const red = Color.fromCSS('#ff0000');     // RGBAColor { r:255, g:0, b:0, a:1 }
+const named = Color.fromCSS('dodgerblue');
+const hex4 = Color.fromCSS('#f0f8');      // with alpha
+```
+
+---
+
+## Color Value Classes
+
+All color classes are **immutable**. Mutation helpers (prefixed with `_`) return new instances.
+
+### `BaseColor` Interface
+
+Every color class implements `BaseColor`:
+
+```typescript
+interface BaseColor {
+  eq(other: BaseColor | null | undefined, ignoreAlpha: boolean): boolean;
+
+  toCSS(): string;
+  toHex(): string;
+
+  toRGBA(): RGBAColor;
+  toHSVA(): HSVAColor;
+  toHSLA(): HSLAColor;
+  toXYZA(): XYZAColor;
+  toLUVA(): LUVAColor;
+}
+```
+
+---
+
+### `RGBAColor`
+
+Represents a color as red, green, blue (0–255) and alpha (0–1).
+
+```typescript
+new Color.RGBA(r, g, b, a)
+```
+
+**Static constructors:**
+
+| Method | Description |
+|---|---|
+| `RGBAColor.fromCSS(input)` | Parse a CSS string. |
+| `RGBAColor.fromHex(input)` | Parse a hex string (`#rgb`, `#rrggbb`, with optional alpha). |
+| `RGBAColor.fromName(name)` | Resolve a CSS named color via canvas. |
+| `RGBAColor.fromHSLA(h, s, l, a?)` | Convert from HSLA components. |
+| `RGBAColor.fromHSVA(h, s, v, a?)` | Convert from HSVA components. |
+| `RGBAColor.fromXYZA(x, y, z, a?)` | Convert from CIE XYZ components. |
+
+**Instance properties:** `r`, `g`, `b`, `a`
+
+**Mutation helpers:** `_r(r)`, `_g(g)`, `_b(b)`, `_a(a)` — each returns a new `RGBAColor` with the channel replaced.
+
+**Additional methods:**
+
+```typescript
+color.luminance()           // relative luminance (WCAG formula)
+color.get_Y()               // luma approximation (0–1)
+color.daltonize(type)       // simulate and compensate for color vision deficiency
+```
+
+<Note>
+  `daltonize` accepts a named CVD type (`'protanope'`, `'deuteranope'`, `'tritanope'`) or a custom 3×3 `CVDMatrix` tuple.
+</Note>
+
+---
+
+### `HSLAColor`
+
+Represents a color as hue (0–1), saturation (0–1), lightness (0–1), and alpha (0–1).
+
+```typescript
+new Color.HSLA(h, s, l, a)
+```
+
+**Static constructors:** `HSLAColor.fromRGBA(r, g, b, a?)`
+
+**Instance properties:** `h`, `s`, `l`, `a`
+
+**Mutation helpers:** `_h(h)`, `_s(s)`, `_l(l)`, `_a(a)`
+
+**Additional methods:**
+
+```typescript
+// Adjust lightness until the resulting color meets the target
+// relative luminance. Used for accessibility-aware color adjustment.
+color.targetLuminance(target: number): HSLAColor
+```
+
+**Output:**
+
+```typescript
+color.toCSS()  // → 'hsl(240,100%,50%)' or 'hsla(240,100%,50%,0.5)'
+```
+
+---
+
+### `HSVAColor`
+
+Represents a color as hue (0–1), saturation (0–1), value (0–1), and alpha (0–1).
+
+```typescript
+new Color.HSVA(h, s, v, a)
+```
+
+**Static constructors:** `HSVAColor.fromRGBA(r, g, b, a?)`
+
+**Instance properties:** `h`, `s`, `v`, `a`
+
+**Mutation helpers:** `_h(h)`, `_s(s)`, `_v(v)`, `_a(a)`
+
+---
+
+### `XYZAColor`
+
+Represents a color in the CIE XYZ perceptual color space.
+
+```typescript
+new Color.XYZA(x, y, z, a)
+```
+
+**Static constructors:** `XYZAColor.fromRGBA(r, g, b, a?)`, `XYZAColor.fromLUVA(l, u, v, a?)`
+
+**Instance properties:** `x`, `y`, `z`, `a`
+
+---
+
+### `LUVAColor`
+
+Represents a color in the CIE LUV perceptual color space, which has better perceptual uniformity than HSL for lightness operations.
+
+```typescript
+new Color.LUVA(l, u, v, a)
+```
+
+**Static constructors:** `LUVAColor.fromXYZA(X, Y, Z, a?)`
+
+**Instance properties:** `l`, `u`, `v`, `a`
+
+**Mutation helpers:** `_l(l)`, `_u(u)`, `_v(v)`, `_a(a)`
+
+---
+
+## ColorAdjuster
+
+`ColorAdjuster` takes a background color and a contrast ratio target, then adjusts arbitrary foreground colors (e.g. user chat name colors) so they remain readable against that background.
+
+```typescript
+class ColorAdjuster {
+  constructor(base?: string, mode?: number, contrast?: number)
+}
+```
+
+<ParamField path="base" type="string">
+  A CSS color string for the background. Defaults to `'#232323'`.
+</ParamField>
+
+<ParamField path="mode" type="number">
+  The adjustment algorithm to use. See [Modes](#modes) below. Defaults to `0` (passthrough).
+</ParamField>
+
+<ParamField path="contrast" type="number">
+  The target contrast ratio. Defaults to `4.5` (WCAG AA for normal text).
+</ParamField>
+
+```typescript
+const adjuster = new ColorAdjuster('#0e0e10', 2, 4.5);
+const adjusted = adjuster.process('#ff0000');
+console.log(adjusted); // a more readable variant of red on a dark background
+```
+
+### `process(color, throw_errors?)`
+
+Adjust a color to meet the contrast target.
+
+<ParamField path="color" type="BaseColor | string" required>
+  The input color. Accepts any `BaseColor` instance or a CSS color string.
+</ParamField>
+
+<ParamField path="throw_errors" type="boolean">
+  When `true`, parsing errors are re-thrown. Defaults to `false` (returns `null` on error).
+</ParamField>
+
+<ResponseField name="returns" type="string | null | undefined">
+  The adjusted CSS color string, `null` on parse failure, or `undefined` for empty input.
+  Returns an empty string `''` when `mode === -1` (fully hide all colors).
+</ResponseField>
+
+Processed values are cached internally; repeated calls with the same input string are cheap.
+
+---
+
+### Modes
+
+| Mode | Name | Description |
+|---|---|---|
+| `-1` | Hidden | Returns `''` for all colors. |
+| `0` | Passthrough | Returns colors unchanged. |
+| `1` | HSL Luma | Adjusts HSL lightness until the WCAG relative luminance target is met. |
+| `2` | LUV | Adjusts the L component in CIE LUV space for perceptually uniform lightness. |
+| `3` | HSL Loop | Iteratively nudges HSL lightness (BTTV-style) until the luma threshold is passed. |
+| `4` | RGB Loop | Iteratively brightens or darkens the RGB channels until the luminance threshold is passed. |
+
+---
+
+### Properties
+
+<ResponseField name="base" type="string">
+  Get or set the background color string. Setting this rebuilds the internal contrast target.
+</ResponseField>
+
+<ResponseField name="contrast" type="number">
+  Get or set the target contrast ratio. Setting this rebuilds the internal contrast target.
+</ResponseField>
+
+<ResponseField name="mode" type="number">
+  Get or set the adjustment mode. Setting this rebuilds the internal contrast target.
+</ResponseField>
+
+<ResponseField name="dark" type="boolean">
+  `true` when the base color is dark (luminance &lt; 0.5). Read-only; updated by `rebuildContrast()`.
+</ResponseField>
+
+### `rebuildContrast()`
+
+Recompute the internal lightness targets based on the current `base`, `contrast`, and `mode`. Called automatically when any of the three setters are used. Also clears the result cache.
+
+---
+
+## Utility Functions
+
+### `hue2rgb(p, q, t)`
+
+Helper used during HSL→RGB conversion. Computes a single channel value given two boundary values and a hue offset.
+
+### `bit2linear(channel)`
+
+Convert an sRGB channel value (0–1) to linear light, following the CSS Color Level 4 / IEC 61966 formula.
+
+### `linear2bit(channel)`
+
+Convert a linear light channel value (0–1) back to sRGB.

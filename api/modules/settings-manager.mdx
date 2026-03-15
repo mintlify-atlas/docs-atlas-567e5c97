@@ -1,0 +1,405 @@
+---
+title: "Settings Manager"
+description: "The SettingsManager module provides a typed, profile-aware key-value store for registering, reading, writing, and watching settings."
+---
+
+The `SettingsManager` (path `'settings'`) is the central store for every configurable value in FrankerFaceZ. It supports multiple profiles with conditional activation, context-aware value derivation, and live change notifications.
+
+```javascript
+// Accessing the settings manager from an add-on
+const settings = this.resolve('settings');
+```
+
+## Module path
+
+```
+settings
+```
+
+Source: `src/settings/index.ts`
+
+---
+
+## Registering settings
+
+### `add(key, definition)`
+
+Registers a named setting with a default value and optional UI descriptor. The add-on proxy automatically stamps the definition with `__source` set to your add-on ID.
+
+```javascript
+settings.add('my-addon.show-overlay', {
+  default: true,
+  ui: {
+    path: 'Add-Ons > My Add-on >> Appearance',
+    title: 'Show overlay',
+    description: 'Display the add-on overlay on stream pages.',
+    component: 'setting-check-box',
+  }
+});
+```
+
+<ParamField path="key" type="string" required>
+  Unique dot-separated key, e.g. `'my-addon.feature.enabled'`. Should be namespaced to your add-on.
+</ParamField>
+<ParamField path="definition" type="SettingDefinition" required>
+  <Expandable title="SettingDefinition fields">
+    <ResponseField name="default" type="T | (ctx: SettingsContext) => T" required>
+      The default value, or a function that computes it from the current context.
+    </ResponseField>
+    <ResponseField name="type" type="string">
+      Merge strategy for profile layering. Built-in types include `'array_merge'`, `'basic_array_merge'`, and `'object_merge'`. Omit for a simple last-write-wins value.
+    </ResponseField>
+    <ResponseField name="requires" type="string[]">
+      Keys of other settings this definition depends on. The `process` function can read them via `ctx.get(otherKey)`.
+    </ResponseField>
+    <ResponseField name="process" type="(ctx: SettingsContext, val: T, meta: SettingMetadata) => T">
+      Transform the raw stored value before it is returned to consumers.
+    </ResponseField>
+    <ResponseField name="equals" type="'requirements' | function">
+      Custom equality check. Pass `'requirements'` to short-circuit recomputation when dependencies have not changed.
+    </ResponseField>
+    <ResponseField name="always_inherit" type="boolean">
+      When `true`, the value is always merged across all active profiles rather than shadowed by the highest-priority one.
+    </ResponseField>
+    <ResponseField name="changed" type="(value: T) => void">
+      Called whenever the resolved value changes. Equivalent to calling `onChange` after registration.
+    </ResponseField>
+    <ResponseField name="ui" type="SettingUiDefinition">
+      Descriptor that places this setting in the FFZ settings panel. See `addUI` for the full field set.
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+### `addUI(key, definition)`
+
+Adds a UI-only entry to the settings panel without creating a stored setting. Useful for information panels, buttons, and spacers.
+
+```javascript
+settings.addUI('my-addon.info-panel', {
+  path: 'Add-Ons > My Add-on >> About',
+  component: 'my-addon-info-component',
+  force_seen: true,
+});
+```
+
+<ParamField path="key" type="string" required>
+  Unique key for this UI element.
+</ParamField>
+<ParamField path="definition" type="SettingUiDefinition" required>
+  <Expandable title="SettingUiDefinition fields">
+    <ResponseField name="path" type="string">
+      Settings panel location using `>` for nesting, `>>` for sub-pages, and `~>` for tabs. E.g. `'Chat > Appearance >> General'`.
+    </ResponseField>
+    <ResponseField name="title" type="string">
+      Label shown in the settings panel.
+    </ResponseField>
+    <ResponseField name="component" type="string">
+      Vue component name to render for this entry.
+    </ResponseField>
+    <ResponseField name="description" type="string">
+      Markdown-formatted help text shown below the control.
+    </ResponseField>
+    <ResponseField name="force_seen" type="boolean">
+      When `true`, this entry is never hidden by the "unseen settings" filter.
+    </ResponseField>
+    <ResponseField name="sort" type="number">
+      Manual sort key within the current settings group.
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+### `remove(key)`
+
+Unregisters a previously added setting. Emits `:removed-definition` and cleans up dependency references.
+
+```javascript
+settings.remove('my-addon.show-overlay');
+```
+
+---
+
+## Reading and writing values
+
+### `get(key)`
+
+Returns the current resolved value of a setting from the main context.
+
+```javascript
+const enabled = settings.get('my-addon.show-overlay');
+// true
+```
+
+<ParamField path="key" type="string" required>
+  The setting key. Also accepts context keys (`'context.channel'`, `'context.moderator'`) and localStorage keys (`'ls.someKey'`).
+</ParamField>
+
+<ResponseField name="returns" type="T">
+  The resolved value. The type depends on the setting definition.
+</ResponseField>
+
+### `set(key, value)` — via the provider
+
+Values are written through the active `SettingsProvider`. Access it via `settings.provider.set(key, value)` or use profile-level APIs:
+
+```javascript
+// Write to the provider directly (stored in the active profile)
+settings.provider.set('p:0:my-addon.show-overlay', false);
+```
+
+<Note>
+Direct writes bypass profile layering. For end-user settings, prefer letting the built-in UI components handle writes through the profile system.
+</Note>
+
+---
+
+## Watching for changes
+
+### `onChange(key, callback, immediate?)`
+
+Registers a callback that fires whenever the resolved value of `key` changes.
+
+```javascript
+settings.onChange('my-addon.show-overlay', (newValue) => {
+  console.log('overlay setting changed to', newValue);
+});
+```
+
+<ParamField path="key" type="string" required>
+  The setting key to watch.
+</ParamField>
+<ParamField path="callback" type="(value: T) => void" required>
+  Called with the new value every time it changes.
+</ParamField>
+<ParamField path="immediate" type="any">
+  If truthy, the callback is invoked immediately with the current value.
+</ParamField>
+
+### `getChanges(key, callback, immediate?)`
+
+Identical to `onChange`. Provided for consistency with the `SettingsContext` API.
+
+### `clearChanges(key, callback)`
+
+Removes a listener previously registered with `onChange` or `getChanges`.
+
+```javascript
+settings.clearChanges('my-addon.show-overlay', myHandler);
+```
+
+---
+
+## Context management
+
+The settings context holds ambient data (current channel, user roles, UI state) that `process` functions and profile filters can read.
+
+### `setContext(data)`
+
+Replaces the entire context with `data`. Triggers a full profile re-selection.
+
+```javascript
+settings.setContext({
+  channel: 'streamer_login',
+  channelID: '12345',
+  moderator: false,
+});
+```
+
+<ParamField path="data" type="ContextData" required>
+  <Expandable title="ContextData fields">
+    <ResponseField name="channel" type="string">
+      Current channel login name.
+    </ResponseField>
+    <ResponseField name="channelID" type="string">
+      Current channel Twitch numeric ID.
+    </ResponseField>
+    <ResponseField name="moderator" type="boolean">
+      Whether the local user is a moderator in this channel.
+    </ResponseField>
+    <ResponseField name="fullscreen" type="boolean">
+      Whether the Twitch player is in fullscreen mode.
+    </ResponseField>
+    <ResponseField name="route" type="{ domain: string | null, name: string | null }">
+      Current Twitch route information.
+    </ResponseField>
+    <ResponseField name="ui" type="{ theatreModeEnabled, squadModeEnabled, theme }">
+      Current UI state flags.
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+### `updateContext(data)`
+
+Partially merges `data` into the current context. Only the provided keys are updated.
+
+```javascript
+settings.updateContext({ moderator: true });
+```
+
+---
+
+## Profile management
+
+### `createProfile(options?)`
+
+Creates a new settings profile and returns the `SettingsProfile` instance.
+
+```javascript
+const profile = settings.createProfile({
+  name: 'Moderation Mode',
+  description: 'Active when I am a moderator.',
+  context: [
+    // FilterData conditions — evaluated against the settings context
+  ]
+});
+```
+
+<ParamField path="options" type="Partial<SettingsProfileMetadata>">
+  <Expandable title="SettingsProfileMetadata fields">
+    <ResponseField name="name" type="string">
+      Display name for the profile.
+    </ResponseField>
+    <ResponseField name="description" type="string">
+      Human-readable description.
+    </ResponseField>
+    <ResponseField name="context" type="FilterData[]">
+      Activation conditions. When all conditions pass, the profile becomes active.
+    </ResponseField>
+    <ResponseField name="url" type="string">
+      Remote URL to auto-sync settings from.
+    </ResponseField>
+    <ResponseField name="show_toggle" type="boolean">
+      Show a manual on/off toggle in the UI.
+    </ResponseField>
+    <ResponseField name="ephemeral" type="boolean">
+      When `true`, the profile is not saved to storage and has a negative ID.
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="returns" type="SettingsProfile">
+  The newly created profile.
+</ResponseField>
+
+### `deleteProfile(id)`
+
+Deletes a profile by numeric ID or by passing the `SettingsProfile` instance. The last remaining non-ephemeral profile cannot be deleted.
+
+```javascript
+settings.deleteProfile(profile.id);
+```
+
+---
+
+## Providers
+
+### `addProvider(key, ProviderClass)`
+
+Registers a custom settings storage backend. Providers are evaluated at startup; calling this after initialization has no effect.
+
+```javascript
+// Called via the window.ffz_providers hook before FFZ initialises:
+window.ffz_providers = window.ffz_providers || [];
+window.ffz_providers.push(({ registerProvider, Provider }) => {
+  class MyProvider extends Provider {
+    // … implement get / set / delete / entries …
+  }
+  registerProvider('my-storage', MyProvider);
+});
+```
+
+<Note>
+Providers must be registered via `window.ffz_providers` **before** FFZ initialises. The array is sealed on first access, making later registrations impossible.
+</Note>
+
+---
+
+## Types
+
+### `SettingDefinition<T>`
+
+```typescript
+type SettingDefinition<T> = {
+  default: T | ((ctx: SettingsContext) => T);
+  type?: string;
+  requires?: string[];
+  process?(ctx: SettingsContext, val: T, meta: SettingMetadata): T;
+  equals?: 'requirements' | ((newVal, oldVal, cache, oldCache) => boolean);
+  always_inherit?: boolean;
+  changed?: (value: T) => void;
+  ui?: SettingUiDefinition<T>;
+};
+```
+
+### `SettingUiDefinition<T>`
+
+```typescript
+type SettingUiDefinition<T> = {
+  path?: string;
+  title?: string;
+  component: string;
+  description?: string;
+  force_seen?: boolean;
+  sort?: number;
+  // Additional fields depend on the component type
+};
+```
+
+### `SettingsProfileMetadata`
+
+```typescript
+type SettingsProfileMetadata = {
+  id: number;
+  uuid: string;
+  name: string;
+  i18n_key?: string | null;
+  hotkey?: string | null;
+  pause_updates: boolean;
+  ephemeral?: boolean;
+  description?: string | null;
+  url?: string | null;
+  show_toggle: boolean;
+  context?: FilterData[] | null;
+};
+```
+
+### `ContextData`
+
+```typescript
+type ContextData = {
+  channel?: string;
+  channelID?: string;
+  channelColor?: string;
+  category?: string;
+  categoryID?: string;
+  title?: string;
+  moderator?: boolean;
+  fullscreen?: boolean;
+  chatHidden?: boolean;
+  isWatchParty?: boolean;
+  route?: { domain: string | null; name: string | null };
+  route_data?: string[];
+  size?: { width: number; height: number };
+  ui?: {
+    theatreModeEnabled?: boolean;
+    squadModeEnabled?: boolean;
+    theme?: number;
+  };
+};
+```
+
+---
+
+## Key events
+
+| Event | Arguments | Description |
+|---|---|---|
+| `:changed:<key>` | `newValue, oldValue` | Fires on the `SettingsManager` when any setting's resolved value changes. Replace `<key>` with the full setting key. |
+| `:added-definition` | `key, definition` | A new setting was registered. |
+| `:removed-definition` | `key, definition` | A setting was unregistered. |
+| `:profile-created` | `profile: SettingsProfile` | A new profile was created. |
+| `:profile-changed` | `profile: SettingsProfile` | A profile's metadata was updated. |
+| `:profile-deleted` | `profile: SettingsProfile` | A profile was deleted. |
+| `:profile-toggled` | `profile, enabled: boolean` | A profile was manually enabled or disabled. |
+| `:profiles-reordered` | — | The profile list was reordered. |
+| `:quota-exceeded` | — | The storage provider exceeded its quota. |
+| `:ls-update` | `key, value` | A monitored localStorage key changed. |

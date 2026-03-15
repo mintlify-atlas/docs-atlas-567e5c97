@@ -1,0 +1,120 @@
+---
+title: "Player Enhancements"
+description: "FrankerFaceZ enhancements to the Twitch video player, including theatre mode, audio controls, and player controls."
+---
+
+FFZ's player module (`src/sites/shared/player.jsx` plus the Twitch-specific `src/sites/twitch-twilight/modules/player.jsx`) wraps and extends the Twitch video player with additional controls, audio processing, and layout options.
+
+<CardGroup cols={2}>
+  <Card title="Theatre Mode" icon="expand">
+    Auto-enter theatre mode on page load, show metadata on hover, and hide whispers.
+  </Card>
+  <Card title="Audio Compressor" icon="wave-square">
+    Optional `DynamicsCompressorNode`-based dynamic range compression with configurable parameters.
+  </Card>
+  <Card title="Player Controls" icon="sliders">
+    Extra buttons including Reset Player, Picture-in-Picture, custom Clip, and Audio Compressor.
+  </Card>
+  <Card title="Volume Controls" icon="volume-high">
+    Scroll-wheel volume adjustment, middle-click mute, and Gain Control for precise output levels.
+  </Card>
+</CardGroup>
+
+## Theatre Mode
+
+FFZ hooks into the `TheatreHost` React component (matched by `n.toggleTheatreMode`) to add three theatre mode settings:
+
+| Setting Key | Default | Description |
+|---|---|---|
+| `player.theatre.auto-enter` | `false` | Automatically activate theatre mode when visiting a channel |
+| `player.theatre.metadata` | `false` | Show stream metadata on mouse-over while in theatre mode (live channels only) |
+| `player.theatre.no-whispers` | `false` | Hide the whisper panel while theatre mode is active |
+
+Auto-entry uses a 250 ms debounced timer to avoid triggering during rapid navigation. Theatre mode is only auto-entered on the `user` route (live channel pages).
+
+## Player Controls
+
+### Reset Player Button
+
+Setting: `player.button.reset` (default `true`). Adds a **Reset Player** button to the player's left control group. Double-clicking the button resets the Twitch player's internal state to resolve playback issues without a full page refresh. The button icon animates on click.
+
+### Picture-in-Picture Button
+
+Setting: `player.button.pip` (default `true`). Adds a **Picture-in-Picture** button when the browser supports `document.pictureInPictureEnabled`. Clicking it toggles PiP mode for the player's `<video>` element.
+
+### Custom Clip Button
+
+Setting: `player.clip-button.custom` (default `false`). Adds a styled Clip button that matches the visual design of other FFZ-added controls. The native Clip button can be hidden separately with `player.clip-button.hide-native`.
+
+### Cast Button
+
+Setting: `player.cast-button.hide` (default `false`). Hides the Chromecast button from the player controls.
+
+## Volume Controls
+
+| Setting Key | Default | Description |
+|---|---|---|
+| `player.volume-scroll` | `false` | Adjust volume by scrolling the mouse wheel over the player |
+| `player.volume-scroll-steps` | `0.1` (10%) | How much volume changes per scroll tick: 10%, 5%, 2%, or 1% |
+| `player.mute-click` | `false` | Mute / unmute by middle-clicking the player |
+
+Scroll volume adjustment supports modifier-key variants: plain scroll, with right-click hold, with Alt, with Shift, or with Ctrl.
+
+## Audio Compressor
+
+FFZ adds an optional audio compressor using the Web Audio API's `DynamicsCompressorNode`. This requires `window.AudioContext` to be available.
+
+Setting: `player.compressor.enable` (default `true`). When enabled, an **Audio Compressor** toggle button appears in the player controls.
+
+### Compressor Parameters
+
+| Setting Key | Default | Range | Description |
+|---|---|---|---|
+| `player.compressor.threshold` | `-50` | -100 – 0 dB | Level above which compression starts |
+| `player.compressor.knee` | `40` | 0 – 40 dB | Range above threshold where curve smooths out |
+| `player.compressor.ratio` | `12` | 0 – 20 | Input dB change needed per 1 dB output change |
+| `player.compressor.attack` | `0` | 0 – 1 s | Time to reduce gain by 10 dB |
+| `player.compressor.release` | `0.25` | 0 – 1 s | Time to increase gain by 10 dB |
+| `player.compressor.default` | `false` | — | Start with the compressor enabled |
+| `player.compressor.shortcut` | `null` | — | Hotkey to toggle the compressor |
+
+### Gain Control
+
+When `player.gain.enable` is on, a `GainNode` is inserted after the compressor, giving independent post-compression volume control.
+
+| Setting Key | Default | Description |
+|---|---|---|
+| `player.gain.enable` | `false` | Enable post-compressor gain control |
+| `player.gain.default` | `100` (%) | Starting gain level (100% = no change) |
+| `player.gain.min` | `0` (%) | Minimum allowed gain |
+| `player.gain.max` | `200` (%) | Maximum allowed gain (200% = double volume) |
+| `player.gain.no-volume` | `false` | Lock built-in volume to 100% and use gain as the only volume control |
+| `player.gain.scroll` | `false` | Adjust gain by scrolling the mouse wheel |
+
+## Playback Settings
+
+| Setting Key | Default | Description |
+|---|---|---|
+| `player.allow-catchup` | `true` | Allow the player to speed up slightly to reduce live delay |
+| `player.no-autoplay` | — | Disable autoplay entirely |
+| `player.home.autoplay` | `true` | Auto-play featured broadcaster on the front page |
+| `player.fade-pause-buffer` | `false` | Fade the player when paused or buffering |
+| `player.disable-content-warnings` | `false` | Automatically skip content warning screens (adults only) |
+
+## Layout and Appearance
+
+### Event Bar
+
+Setting: `player.hide-event-bar` (default `false`). Hides `.channel-root .live-event-banner-ui__header` — the event banner shown above the player for channel events — and triggers a player reposition.
+
+### Extensions
+
+CSS tweaks can hide player extensions: `player-ext` hides extension overlays entirely; `player-ext-hover` hides them only when player controls are hidden.
+
+### Fullscreen
+
+Setting: `player.fullscreen.auto-chat` (default `false`). Automatically expands the collapsed chat sidebar when entering fullscreen mode.
+
+### Embed Metadata
+
+Setting: `player.embed-metadata` (default `true`). Shows stream metadata on mouse-over in embed and popout player views.

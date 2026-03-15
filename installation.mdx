@@ -1,0 +1,168 @@
+---
+title: "Installation"
+description: "Install FrankerFaceZ as a browser extension, userscript, or run it from source for development."
+---
+
+<Tabs>
+
+<Tab title="Browser extension">
+
+The browser extension is the recommended installation method for end users. It installs as a standard extension and activates automatically on Twitch.
+
+<Steps>
+
+<Step title="Chrome">
+
+Install FrankerFaceZ from the Chrome Web Store:
+
+1. Open the [FrankerFaceZ Chrome extension page](https://www.frankerfacez.com/subscribe).
+2. Click **Add to Chrome**.
+3. Confirm the permissions prompt.
+4. Open any Twitch channel. FFZ activates automatically.
+
+</Step>
+
+<Step title="Firefox">
+
+Install FrankerFaceZ from the Firefox Add-ons site:
+
+1. Open the [FrankerFaceZ Firefox add-on page](https://www.frankerfacez.com/subscribe).
+2. Click **Add to Firefox**.
+3. Confirm the permissions prompt.
+4. Open any Twitch channel. FFZ activates automatically.
+
+</Step>
+
+</Steps>
+
+</Tab>
+
+<Tab title="Userscript">
+
+The userscript version works in any browser with a userscript manager. It is also the version to use for **add-on development**, because it is designed to load assets from a local development server.
+
+<Steps>
+
+<Step title="Install a userscript manager">
+
+Install [Tampermonkey](https://www.tampermonkey.net/) or [Greasemonkey](https://www.greasespot.net/) for your browser.
+
+</Step>
+
+<Step title="Install the FFZ userscript">
+
+1. Open the FrankerFaceZ userscript URL in your browser.
+2. Your userscript manager will detect the `.user.js` file and prompt you to install it.
+3. Confirm the installation.
+4. Open any Twitch channel. FFZ activates automatically.
+
+</Step>
+
+</Steps>
+
+<Info>
+The userscript version is the correct choice when running a local development server. It loads assets from `https://localhost:8000` when `localStorage.ffzDebugMode` is `true`.
+</Info>
+
+</Tab>
+
+<Tab title="From source">
+
+Building from source is required if you want to contribute to FFZ core or if you need to run the local development server for add-on development.
+
+**Prerequisites:**
+- [Node.js](https://nodejs.org/)
+- [pnpm](https://pnpm.io/)
+
+<Steps>
+
+<Step title="Clone the repository">
+
+```bash
+git clone https://github.com/FrankerFaceZ/FrankerFaceZ.git
+cd FrankerFaceZ
+```
+
+</Step>
+
+<Step title="Install dependencies">
+
+```bash
+pnpm install
+```
+
+</Step>
+
+<Step title="Start the development server">
+
+```bash
+pnpm start
+```
+
+This runs `webpack-dev-server` and watches for source changes. The server listens on port 8000 and serves local development builds, falling back to the CDN for any file that doesn't have a local copy.
+
+<Warning>
+`webpack-dev-server` self-signs a TLS certificate for HTTPS. You must open `https://localhost:8000` in your browser and accept the certificate warning before any assets will load. Skipping this step will cause the browser to silently block all requests to the dev server.
+</Warning>
+
+</Step>
+
+<Step title="Build for production">
+
+To produce a production build in the `dist/` directory:
+
+```bash
+pnpm build
+```
+
+Additional build variants:
+
+| Command | Output |
+|---|---|
+| `pnpm build` | Production build |
+| `pnpm build:dev` | Development build (unminified) |
+| `pnpm build:ext` | Browser extension build |
+
+</Step>
+
+</Steps>
+
+</Tab>
+
+</Tabs>
+
+## Debug mode
+
+Debug mode tells the userscript version of FFZ to load assets from your local dev server instead of the CDN. It is required for add-on development.
+
+Enable it by running the following in your browser's developer console on any Twitch page:
+
+```javascript
+localStorage.ffzDebugMode = true;
+```
+
+Reload the page after setting this. To disable debug mode:
+
+```javascript
+localStorage.removeItem('ffzDebugMode');
+```
+
+<Note>
+Debug mode only affects the userscript version of FFZ. The browser extension always loads from the CDN.
+</Note>
+
+## Editor setup
+
+FFZ uses tabs for indentation and LF (`\n`) line endings. Configure your editor to match.
+
+For Visual Studio Code, add the following to your workspace settings and install the ESLint extension:
+
+```json
+{
+    "eslint.validate": [
+        "javascript",
+        "javascriptreact",
+        "vue"
+    ]
+}
+```

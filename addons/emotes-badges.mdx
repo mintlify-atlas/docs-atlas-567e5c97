@@ -1,0 +1,262 @@
+---
+title: "Custom Emotes and Badges"
+description: "Add custom emote sets and badges to FrankerFaceZ from your add-on."
+---
+
+FFZ add-ons can register custom emote sets and badges that appear alongside native Twitch and FFZ content. Both systems use the `Emotes` and `Badges` modules under `chat`, accessible via the Chat module proxy.
+
+## Accessing the Emotes and Badges Modules
+
+```typescript
+constructor(name, parent) {
+  super(name, parent);
+  this.inject('chat');
+}
+
+onEnable() {
+  // Sub-modules are accessed as properties of the parent chat module.
+  const emotes = this.chat.emotes;
+  const badges = this.chat.badges;
+}
+```
+
+Alternatively inject them directly:
+
+```typescript
+this.inject('chat.emotes');
+this.inject('chat.badges');
+// → this.emotes, this.badges
+```
+
+## Custom Emotes
+
+### Registering a Provider
+
+Before loading emote sets, register a **provider** for your add-on. The provider entry describes your add-on in the emote menu:
+
+```javascript
+this.chat.emotes.setProvider('my-addon', {
+  name: 'My Add-On Emotes',
+  // font_icon: 'ffz-i-my-icon',  // optional icon class
+});
+```
+
+<Warning>
+  Always include your add-on ID in the provider string. The dev proxy checks this and logs a `[DEV-CHECK]` warning if you do not.
+</Warning>
+
+### Loading an Emote Set
+
+Call `emotes.loadSetData(set_id, data)` to register emote set data. The `set_id` must be a string and should include your add-on ID:
+
+```javascript
+const setId = 'my-addon--global-emotes';
+
+this.chat.emotes.loadSetData(setId, {
+  id: setId,
+  title: 'My Add-On Emotes',
+  source: 'my-addon',     // links back to your provider
+  icon: 'https://cdn.example.com/icon.png',
+
+  // Array of emote objects (see EmoteSet.emotes below)
+  emoticons: [
+    {
+      id: 1001,
+      name: 'MyEmote',
+      width: 28,
+      height: 28,
+      urls: {
+        1: 'https://cdn.example.com/emotes/1001/1x.png',
+        2: 'https://cdn.example.com/emotes/1001/2x.png',
+        4: 'https://cdn.example.com/emotes/1001/4x.png',
+      },
+    },
+  ],
+});
+```
+
+### Making an Emote Set Global (Available to All Users)
+
+After loading the set data, add it to the default sets list for your provider:
+
+```javascript
+this.chat.emotes.addDefaultSet('my-addon', setId);
+```
+
+To remove it:
+
+```javascript
+this.chat.emotes.removeDefaultSet('my-addon', setId);
+```
+
+### Scoping an Emote Set to Subscribers
+
+Use `addSubSet` for emote sets that should be active only when the user is subscribed (or in similar subscription-scoped contexts):
+
+```javascript
+this.chat.emotes.addSubSet('my-addon', setId);
+```
+
+### Scoping an Emote Set to a Room
+
+To make a set available only inside a specific channel:
+
+```javascript
+const room = this.chat.getRoom(null, 'channelname');
+if ( room ) {
+  room.addSet('my-addon', setId, setData);
+}
+```
+
+### Emote Object Structure
+
+Each entry in the `emoticons` array must have:
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `number` | Unique numeric ID for the emote. |
+| `name` | `string` | The text code users type to use the emote. |
+| `urls` | `{ 1: string, 2?: string, 4?: string }` | Image URLs at 1x, 2x, and 4x resolutions. |
+| `width` | `number` | Intrinsic pixel width. |
+| `height` | `number` | Intrinsic pixel height. |
+| `modifier` | `boolean` | If `true`, this emote acts as a modifier that stacks on the preceding emote. |
+| `modifier_flags` | `number` | Bitmask of `MODIFIER_FLAGS` effects applied when this emote is used as a modifier. |
+| `hidden` | `boolean` | If `true`, the emote's name is displayed as `???` in tooltips. |
+| `animated` | `{ 1: string, 2?: string, 4?: string }` | Animated image URLs shown on hover. |
+
+The `processEmote()` method normalizes this structure and builds `src`, `srcSet`, and `token` fields used by the renderer.
+
+## Modifier Flags
+
+Modifier flags control visual effects applied when a modifier emote follows another emote. The flags are defined in `src/modules/chat/emotes.js`:
+
+```javascript
+// From src/modules/chat/emotes.js
+const Flags = make_enum_flags(
+  'Hidden',    // 1  — hide the emote itself (only show the modified emote)
+  'FlipX',     // 2  — flip horizontally
+  'FlipY',     // 4  — flip vertically
+  'GrowX',     // 8  — stretch horizontally
+  'Slide',     // 16 — slide animation
+  'Appear',    // 32 — appear animation
+  'Leave',     // 64 — leave animation
+  'Rotate',    // 128 — continuous rotation
+  'Rotate90',  // 256 — 90° rotation
+  'Greyscale', // 512 — greyscale filter
+  'Sepia',     // 1024 — sepia filter
+  'Rainbow',   // 2048 — rainbow hue animation
+  'HyperRed',  // 4096 — intense red filter
+  'Shake',     // 8192 — shake animation
+  'Cursed',    // 16384 — cursed (photocopy) filter
+  'Jam',       // 32768 — jam dance animation
+  'Bounce',    // 65536 — bounce animation
+  'NoSpace'    // 131072 — remove spacing between this emote and the next
+);
+
+export const MODIFIER_FLAGS = Flags;
+```
+
+Combine flags with bitwise OR:
+
+```javascript
+// An emote that flips horizontally and rotates:
+modifier_flags: MODIFIER_FLAGS.FlipX | MODIFIER_FLAGS.Rotate
+```
+
+## Custom Badges
+
+### Loading Badge Data
+
+Call `badges.loadBadgeData(badge_id, data)` to register a badge. The `badge_id` should contain your add-on ID:
+
+```javascript
+this.chat.badges.loadBadgeData('my-addon--contributor', {
+  id: 1,                    // numeric ID
+  name: 'contributor',      // internal name
+  title: 'Contributor',     // displayed in tooltip
+  slot: 10,                 // position in the badge row (lower = further left)
+  addon: 'my-addon',        // identifies this as an add-on badge
+
+  // Provide either image + color, or urls:
+  image: 'https://cdn.example.com/badges/contributor/1.png',
+  color: '#6441a5',
+
+  // High-resolution URLs:
+  urls: {
+    1: 'https://cdn.example.com/badges/contributor/1.png',
+    2: 'https://cdn.example.com/badges/contributor/2.png',
+    4: 'https://cdn.example.com/badges/contributor/4.png',
+  },
+});
+```
+
+<Note>
+  When `loadBadgeData` is called via the add-on proxy, `data.addon` is automatically set to your add-on ID if it is `undefined`. This marks the badge as owned by your add-on for cleanup purposes.
+</Note>
+
+### Badge Definition Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `number` | Numeric badge ID. |
+| `name` | `string` | Internal name (e.g. `'moderator'`, `'contributor'`). |
+| `title` | `string` | Tooltip title. |
+| `slot` | `number` | Badge position. See `BADGE_POSITIONS` in `badges.jsx` for reference values. |
+| `addon` | `string \| boolean` | Set to your add-on ID string to group the badge under your add-on in the visibility settings. Set to `true` for generic add-on grouping. |
+| `image` | `string` | 1x image URL. |
+| `urls` | `{ 1, 2?, 4? }` | Multi-resolution image URLs. Takes priority over `image`. |
+| `color` | `string` | CSS background color. |
+| `replaces` | `boolean` | If `true`, this badge replaces the badge in the same slot. |
+| `replaces_type` | `string` | Badge type name to replace (e.g. `'moderator'`). Only required when `replaces` would be ambiguous. |
+| `click_url` | `string` | URL to open when the badge is clicked (if badges are set to clickable). |
+| `click_handler` | `function` | Custom click handler: `(user_id, user_login, room_id, room_login, data, event) => url` |
+| `slot` | `number` | Position in the badge row. |
+
+### Assigning Badges to Users
+
+After registering the badge definition, assign it to specific users:
+
+```javascript
+// Assign to a single user by their User object:
+const user = this.chat.getUser('user_id_here', 'username');
+if ( user ) {
+  user.addBadge('my-addon', 'my-addon--contributor');
+}
+```
+
+For assigning to many users at once (e.g. from a server response), use `setBulk`:
+
+```javascript
+// data.users is an array of user ID strings:
+this.chat.badges.setBulk('my-addon', 'my-addon--contributor', data.users);
+```
+
+### Removing a Badge
+
+```javascript
+this.chat.badges.removeBadge('my-addon--contributor');
+```
+
+All badges owned by your add-on (`data.addon === 'my-addon'`) are removed automatically when the add-on is fully unloaded.
+
+## Rendering Pipeline
+
+Here is the end-to-end flow for a chat message with add-on emotes and badges:
+
+1. **Message received** — FFZ's site integration captures the raw Twitch message object.
+2. **`standardizeMessage()`** — Normalizes the message structure and assigns FFZ badges via `badges.getBadges()`.
+3. **`cacheBadges()`** — Resolves each badge slot to CSS style data using `buildBadgeCSS()`. Badge CSS is generated by `generateBadgeCSS()` and injected via `ManagedStyle`.
+4. **`tokenizeString()`** — Runs all tokenizers in priority order, transforming the raw text into typed tokens. The FFZ emote tokenizer matches emote names against `emote_sets` and replaces text tokens with `type: 'emote'` tokens.
+5. **Render** — The React/Preact renderer maps each token type to a component. Emote tokens become `<img>` elements with `data-provider`, `data-id`, and `data-set` attributes.
+
+### CSS Generation for Emotes
+
+Emote CSS (positioning for modifier emotes) is generated by `generateEmoteCSS()` and injected into the page via a `ManagedStyle` instance keyed `es--<set_id>`:
+
+```javascript
+// From src/modules/chat/emotes.js
+if ( this.style && (css.length || data.css) )
+  this.style.set(`es--${set_id}`, css.join('') + (data.css || ''));
+```
+
+You can attach raw CSS to a set via the `css` field in the set data object for custom layout adjustments.

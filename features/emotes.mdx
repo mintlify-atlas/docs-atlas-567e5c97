@@ -1,0 +1,108 @@
+---
+title: "Emotes"
+description: "How FrankerFaceZ custom emotes work, including emote sets, modifier flags, and the emote menu."
+---
+
+FrankerFaceZ extends Twitch's native emote system with a full custom emote pipeline. FFZ emotes are delivered from the FFZ emote server, organized into sets, and rendered via CSS-injected styles.
+
+<CardGroup cols={2}>
+  <Card title="Emote Sets" icon="layer-group">
+    Global, channel, and personal sets deliver emotes to every viewer, specific channels, or individual users.
+  </Card>
+  <Card title="Modifier Flags" icon="wand-magic-sparkles">
+    Apply visual effects to emotes by appending special modifier emotes after a base emote in chat.
+  </Card>
+  <Card title="Emote Menu" icon="face-smile">
+    A built-in picker surfaces all available emotes, organized by provider and set.
+  </Card>
+  <Card title="Emote Effects" icon="sparkles">
+    Per-emote CSS animations and filters controlled by individual settings keys.
+  </Card>
+</CardGroup>
+
+## How FFZ Emotes Work
+
+FFZ emotes are stored in **emote sets**. When a user visits a channel, FFZ loads the relevant sets from the FFZ API and injects their CSS into the page via a `ManagedStyle` element keyed by set ID (e.g. `es--12345`). Each emote in a set carries an ID, name, and image URLs at 1×, 2×, and 4× densities.
+
+Emote source priorities are configurable through the `chat.emotes.source-priorities` setting, which exposes a drag-and-drop UI listing all registered providers.
+
+### Emote Sets
+
+FFZ tracks three categories of sets:
+
+| Set Type | Description | Internal Collection |
+|---|---|---|
+| **Global sets** | Available to every user on every channel | `emotes.global_sets` |
+| **Default sets** | Activated by a provider for a specific channel or context | `emotes.default_sets` |
+| **Sub sets** | Granted to subscribers or specific users | `emotes.sub_sets` |
+
+The FFZ provider (`ffz`) is always registered. Add-ons can register additional providers via `emotes.setProvider()` and load set data via `emotes.addDefaultSet()` / `emotes.addSubSet()` / `emotes.loadSetData()`.
+
+### FFZ Emote Server Integration
+
+FFZ communicates with the FFZ API over PubSub to receive real-time emote changes. When the server sends `pubsub:command:add_emote` or `pubsub:command:follow_sets`, the local emote set is updated immediately without a page reload.
+
+## Modifier Emotes
+
+Modifier emotes are special emotes that apply visual effects to the emote immediately preceding them in chat. They must be placed **after** a base emote with no extra text between them. When the tokenizer detects a modifier emote following a compatible base emote, both are wrapped in a `modified-emote` container with a `data-effects` attribute listing the active modifier flag bits.
+
+```html
+<!-- Example: PogChamp followed by a Rainbow modifier -->
+<span class="modified-emote" data-effects="2048">
+  <img class="chat-image chat-line__message--emote" ...>
+  <!-- modifier emote rendered inline -->
+</span>
+```
+
+The CSS for each effect is generated at runtime and injected via a separate `ManagedStyle('effects')` instance.
+
+### Modifier Flags (`MODIFIER_FLAGS`)
+
+Defined via `make_enum_flags` in `src/modules/chat/emotes.js`:
+
+| Flag | Bit Value | CSS Effect | Animated |
+|---|---|---|---|
+| `Hidden` | 1 | Hides the modifier emote itself | No |
+| `FlipX` | 2 | `scaleX(-1)` — horizontal mirror | No |
+| `FlipY` | 4 | `scaleY(-1)` — vertical mirror | No |
+| `GrowX` | 8 | Stretch horizontal (Stretch X) | No |
+| `Slide` | 16 | `ffz-effect-slide` — horizontal background scroll | Yes |
+| `Appear` | 32 | `ffz-effect-appear` — bounce-in over 3 s loop | Yes |
+| `Leave` | 64 | `ffz-effect-leave` — bounce-out over 3 s loop | Yes |
+| `Rotate` | 128 | `ffz-effect-rotate` — 360° rotation every 1.5 s | Yes |
+| `Rotate90` | 256 | 90° rotation via transform | No |
+| `Greyscale` | 512 | `grayscale(1)` filter | No |
+| `Sepia` | 1024 | `sepia(1)` filter | No |
+| `Rainbow` | 2048 | `ffz-effect-rainbow` — hue-rotate loop over 2 s | Yes |
+| `HyperRed` | 4096 | `brightness(0.2) sepia(1) brightness(2.2) contrast(3) saturate(8)` | No |
+| `Shake` | 8192 | `ffz-effect-shake` — rapid random translation at 0.1 s | Yes |
+| `Cursed` | 16384 | `grayscale(1) brightness(0.7) contrast(2.5)` ("Photocopy") | No |
+| `Jam` | 32768 | `ffz-effect-jam` — rhythmic rotation/translation at 0.6 s | Yes |
+| `Bounce` | 65536 | `ffz-effect-bounce` — squash-and-stretch loop at 0.5 s | Yes |
+| `NoSpace` | 131072 | Collapses spacing between this emote and the previous | No |
+
+<Note>
+Combining `Appear` + `Leave` produces an in-out animation (`ffz-effect-in-out`) over 6 s instead of playing both animations independently. Combining `Bounce` + `FlipY` adds a `translateY(100%)` transform so the bounce originates from the top.
+</Note>
+
+Animated effects depend on the `chat.emotes.animated` setting being enabled. Each animated effect has its own settings key (e.g. `chat.effects.Slide`, `chat.effects.Rotate`) so individual effects can be disabled even when global animation is on.
+
+## The Emote Menu
+
+FFZ adds a custom emote picker to chat. It lists all emotes from every active provider, organized by provider icon and set name. Emotes can be marked as favorites per-provider (e.g. `ffz`, `twitch`) and are stored in local settings.
+
+## Settings Reference
+
+| Setting Key | Default | Description |
+|---|---|---|
+| `chat.emotes.enabled` | `2` (Enabled) | `0` = disabled, `1` = Twitch only, `2` = all emotes |
+| `chat.emotes.2x` | `0` | `0` = normal, `1` = larger emotes, `2` = larger emotes and emoji |
+| `chat.emotes.limit-size` | `true` | Cap native Twitch emote size to prevent oversized emotes |
+| `chat.emotes.allow-gigantify` | `true` | Allow the "Gigantify an Emote" Channel Points Power-Up |
+| `chat.fix-bad-emotes` | `true` | Clean up white borders / solid backgrounds on bad global emotes |
+| `chat.click-emotes` | `true` | Open emote info pages by Shift-clicking emotes |
+| `chat.sub-emotes` | `true` | Open Twitch sub pages by Shift-clicking sub emotes |
+| `chat.emote-dialogs` | `true` | Open emote info cards for Twitch emotes by clicking |
+| `chat.emotes.source-priorities` | `null` | Provider priority order (drag-and-drop UI) |
+| `chat.effects.enable` | `true` | Master toggle for all emote effects |
+| `chat.effects.<Flag>` | varies | Per-effect toggle (e.g. `chat.effects.Rotate`, `chat.effects.Rainbow`) |

@@ -1,0 +1,127 @@
+---
+title: "Badges"
+description: "How FrankerFaceZ custom badges work, including badge rendering, CSS styles, priority, and settings."
+---
+
+FrankerFaceZ extends the Twitch badge system with its own set of globally-delivered badges, per-channel badges, and full support for add-on-supplied badges. Badges are rendered entirely through CSS class injection, with no runtime DOM manipulation required for each message.
+
+<CardGroup cols={2}>
+  <Card title="CSS Rendering" icon="palette">
+    Badges are rendered via generated CSS rules — no extra DOM elements per message.
+  </Card>
+  <Card title="Multiple Styles" icon="shapes">
+    Seven visual styles ranging from square to circular, with transparent and colored mask variants.
+  </Card>
+  <Card title="Light & Dark Modes" icon="moon">
+    `CSS_BADGES` defines per-badge colors for both Twitch theme modes, with automatic color adjustment.
+  </Card>
+  <Card title="Add-on Badges" icon="puzzle-piece">
+    Add-ons can register badges through the proxy API and control their visibility and ordering.
+  </Card>
+</CardGroup>
+
+## How FFZ Custom Badges Work
+
+FFZ loads global badge definitions from the FFZ API on startup (`loadGlobalBadges()`). Each badge definition contains an ID, title, image URLs (1×, 2×, 4×), optional CSS overrides, color, and behavioral flags such as `replaces` and `replaces_type`.
+
+Badge data is stored in `this.badges` (FFZ/add-on badges) and `this.twitch_badges` (Twitch native badges). On each chat message render, FFZ merges both badge lists and generates a CSS class per badge slot.
+
+## Badge Rendering
+
+All badge styling is produced by the `generateBadgeCSS()` function (`src/modules/chat/badges.jsx:122`). This function selects a CSS template based on the active style (0–6) and produces an inline `style` string. The result is injected into a `ManagedStyle('badges')` element keyed by badge ID.
+
+### CSS Templates (Styles 0–6)
+
+| Value | Name | Description |
+|---|---|---|
+| `0` | Square | Solid background with image, no border radius |
+| `1` | Rounded | Square with small border radius (`0.2rem`) |
+| `2` | Circular | Round badge with slightly smaller image (`0.9rem` radius) |
+| `3` | Circular (Color Only) | Round badge, background color only — no image |
+| `4` | Circular (Color Only, Small) | Same as 3, but with explicit `height` and `min-width` |
+| `5` | Transparent | Image over transparent background (inverts non-dark) |
+| `6` | Transparent (Colored) | CSS `mask-image` with accent color fill |
+
+Setting: `chat.badges.style` (default `1` = Rounded).
+
+### High-DPI Support
+
+FFZ generates `image-set()` declarations to serve 1×, 2×, and 4× badge images on high-DPI displays. On Firefox (where `image-set()` support was long absent), the `chat.badges.media-queries` setting generates `@media` queries as a fallback.
+
+### SVG Badges
+
+Badges marked `svg: true` in `CSS_BADGES` use a single `.svg` URL instead of resolution-specific PNGs. The base URL pattern is `https://cdn.frankerfacez.com/static/badges/twitch/<version>/<badge>.svg`.
+
+## CSS_BADGES — Light and Dark Color Definitions
+
+The `CSS_BADGES` object in `src/modules/chat/badges.jsx:15` defines badge background colors keyed by badge version (`1` = pre-December 2019, `2` = current).
+
+### Badge Version 2 Colors (current)
+
+| Badge | Dark / Light Color | Notes |
+|---|---|---|
+| `staff` | `#000` | |
+| `admin` | `#DB7600` | |
+| `broadcaster` | `#E91916` | |
+| `moderator` | `#00AD03` | SVG in version 1 |
+| `lead_moderator` | `#00AD03` | |
+| `global_mod` | `#006441` | |
+| `twitchbot` | `#00AD03` | |
+| `partner` | `#9146FF` | |
+| `subscriber` | `#8205B4` (version 0 & 1) | |
+| `vip` | `#E005B9` | |
+| `turbo` | `#59399A` | |
+| `premium` | `#00A0D6` | |
+| `anonymous-cheerer` | `#4B367C` | |
+| `clip-champ` | `#9146FF` | |
+| `artist-badge` | `#1e69ff` | |
+| `no_audio` / `no_video` | `#323239` | |
+| `bot-badge` | `#00A3A3` | Displayed via `TWITCH_STYLE_BOT_BADGE` |
+
+<Info>
+Transparent-mode badges (styles 5 and 6) check the `trans` field in `CSS_BADGES` for a separate color to use, and may invert the image based on the `invert` property and the current theme state.
+</Info>
+
+## Badge Priority and Ordering
+
+The `BADGE_POSITIONS` export defines sort keys for known Twitch badge types:
+
+| Badge Type | Position |
+|---|---|
+| `staff` | -2 |
+| `admin`, `global_mod` | -1 |
+| `broadcaster` | 0 |
+| `moderator`, `lead_moderator` | 1 |
+| `twitchbot`, `bot-badge` | 2 |
+| `vip` | 3 |
+| `subscriber` | 25 |
+
+Add-on badges specify a `slot` number to control their position relative to Twitch badges.
+
+## Unified Bot Badge
+
+FFZ can replace the standard moderator badge for known chat bots with a dedicated bot badge. The `TWITCH_STYLE_BOT_BADGE` constant provides the FFZ-hosted bot badge image at `https://cdn.frankerfacez.com/static/badges/twitch/2/bot-badge/1/` in 1×, 2×, and 4× sizes. The badge sets `replaces_type: 'moderator'` to substitute the mod badge.
+
+Setting: `chat.badges.unify-bot-badge` — `0` = disabled, `1` = FFZ-style badge, `2` = Twitch-style badge (default).
+
+## Color Adjustment
+
+When `chat.badges.fix-colors` is enabled (default), FFZ passes badge colors through a `ColorAdjuster` to ensure adequate contrast against the current chat background. This only affects FFZ-rendered badges — subscriber and bit badges are not adjusted.
+
+## Badge Tooltips
+
+Hovering a badge shows a rich tooltip rendered by the `badge` tooltip type. The tooltip displays the badge title, tier information, and optionally a preview image if `tooltip.badge-images` is enabled. For badges originating from a different channel (e.g. shared room badges), the source channel's display name is shown.
+
+## Settings Reference
+
+| Setting Key | Default | Description |
+|---|---|---|
+| `chat.badges.style` | `1` (Rounded) | Badge shape: 0=Square, 1=Rounded, 2=Circular, 3=Circular Color, 4=Circular Color Small, 5=Transparent, 6=Transparent Colored |
+| `chat.badges.version` | `2` | Badge asset version: 1 = pre-Dec 2019, 2 = current |
+| `chat.badges.unify-bot-badge` | `2` | Bot badge display: 0=off, 1=FFZ style, 2=Twitch style |
+| `chat.badges.fix-colors` | `true` | Adjust badge colors for visibility against the background |
+| `chat.badges.clickable` | `2` | 0=disabled, 1=legacy open URL, 2=open badge card |
+| `chat.badges.custom-mod` | `true` | Use custom moderator badges where provided by the channel |
+| `chat.badges.custom-vip` | `true` | Use custom VIP badges where provided by the channel |
+| `chat.badges.hidden` | `{}` | Per-badge visibility overrides (managed via the Visibility tab) |
+| `chat.badges.media-queries` | `true` (Firefox only) | Use `@media` queries for hi-DPI badge images on Firefox |

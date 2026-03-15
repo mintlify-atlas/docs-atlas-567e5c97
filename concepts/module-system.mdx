@@ -1,0 +1,273 @@
+---
+title: "Module System"
+description: "The Module class is the fundamental building block of FrankerFaceZ. Every feature, add-on, and core system is a Module subclass with a path, lifecycle hooks, and dependency injection."
+---
+
+Every discrete piece of functionality in FrankerFaceZ is a `Module`. Modules form a tree rooted at the `FrankerFaceZ` instance. They declare dependencies on each other, and the system loads and enables them in the correct order.
+
+## The Module class
+
+`Module` is defined in `src/utilities/module.ts`. It extends `HierarchicalEventEmitter`, which itself extends `EventEmitter`, so every module can emit and listen for events.
+
+To create a module, extend `Module` and implement the lifecycle hooks you need:
+
+```typescript
+import Module from 'utilities/module';
+
+class MyFeature extends Module {
+    // Declare that this module needs the settings module to be enabled first.
+    settings: SettingsManager = null as any;
+
+    constructor(name?: string, parent?: GenericModule) {
+        super(name, parent);
+        this.inject('settings');
+    }
+
+    async onEnable() {
+        this.settings.add('my-feature.enabled', {
+            default: true,
+            ui: {
+                path: 'My Feature >> General',
+                title: 'Enable My Feature',
+                component: 'setting-check-box'
+            }
+        });
+    }
+
+    async onDisable() {
+        // clean up
+    }
+}
+```
+
+## Registering and injecting modules
+
+The module system has two distinct operations for wiring modules together.
+
+<Tabs>
+  <Tab title="inject()">
+    `inject()` **registers** a new module as a child of the current module, **and** adds it to the current module's `requires` list so it is enabled before `onEnable()` runs. The module instance is also assigned to a property on the calling module.
+
+    ```typescript
+    // From src/main.ts — inject a new class:
+    this.inject('settings', SettingsManager);
+    // this.settings is now the SettingsManager instance
+    // SettingsManager will be enabled before FrankerFaceZ.onEnable()
+
+    // From src/addons.ts — inject an already-registered module by path:
+    this.inject('settings');   // resolves 'settings' from the module registry
+    this.inject('i18n');       // resolves 'i18n'
+    this.inject('load_tracker');
+    ```
+
+    The third parameter of `inject()` controls whether the dependency is added to `requires`. Pass `false` to inject the reference without creating an enable-ordering dependency.
+  </Tab>
+  <Tab title="register()">
+    `register()` creates a new child module and adds it to the module registry, but does **not** add it to `requires`. Use this when you want a module to be available in the tree without the current module being blocked on its enabling.
+
+    ```typescript
+    // From src/main.ts — register without requiring:
+    this.register('vue', VueModule);
+    // VueModule is now at path 'vue' in the registry
+    // but FrankerFaceZ does not wait for it before enabling
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+  When `inject()` is called with just a string, it performs a lookup in the module registry by that path. If the module hasn't been registered yet, the system creates a placeholder and fills in the reference once the module is registered. This allows forward declarations.
+</Note>
+
+## Lifecycle hooks
+
+All lifecycle hooks are optional. Define only the ones you need.
+
+| Hook | When it's called | Can return `Promise` |
+|---|---|---|
+| `onLoad()` | After all `load_requires` modules are enabled | Yes |
+| `onUnload()` | Before the module is unloaded, after dependents are disabled | Yes |
+| `onEnable()` | After all `requires` modules are enabled and `onLoad()` completes | Yes |
+| `onDisable()` | When the module is being disabled, after dependents are disabled | Yes |
+
+```typescript
+class MyModule extends Module {
+    protected async onLoad(): Promise<void> {
+        // Called once when the module is first loaded.
+        // Safe to do expensive one-time setup here.
+    }
+
+    protected async onUnload(): Promise<void> {
+        // Called when the module is unloaded.
+        // Must be defined if onLoad is defined and the module should be unloadable.
+    }
+
+    protected async onEnable(): Promise<void> {
+        // Called each time the module is enabled.
+        // Register event listeners, apply DOM changes, etc.
+    }
+
+    protected async onDisable(): Promise<void> {
+        // Called each time the module is disabled.
+        // Remove event listeners and undo DOM changes.
+    }
+}
+```
+
+<Warning>
+  If you define `onLoad` but not `onUnload`, the module **cannot be unloaded**. `canUnload()` will return `false` and calling `unload()` will throw. The same applies to `onEnable` and `onDisable`.
+</Warning>
+
+## State and LoadState enums
+
+You can read the current state of any module via its properties:
+
+```typescript
+const mod = ffz.resolve('settings');
+
+// Enable state
+mod.state;      // State enum value
+mod.enabled;    // true if State.Enabled
+mod.enabling;   // true if State.Enabling
+
+// Load state
+mod.load_state; // LoadState enum value
+mod.loaded;     // true if LoadState.Loaded
+mod.loading;    // true if LoadState.Loading
+```
+
+The full enum values, as defined in `src/utilities/module.ts`:
+
+<Tabs>
+  <Tab title="State">
+    ```typescript
+    export enum State {
+        Disabled,   // 0 — module is off
+        Enabling,   // 1 — waiting for dependencies or onEnable()
+        Enabled,    // 2 — fully active
+        Disabling   // 3 — waiting for dependents to disable or onDisable()
+    }
+    ```
+  </Tab>
+  <Tab title="LoadState">
+    ```typescript
+    export enum LoadState {
+        Unloaded,   // 0 — never loaded
+        Loading,    // 1 — waiting for load_requires or onLoad()
+        Loaded,     // 2 — loaded and ready
+        Unloading   // 3 — waiting for dependents or onUnload()
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Dependency declarations
+
+Beyond `inject()`, you can declare dependencies directly on the class using the `requires` and `load_requires` static or instance properties:
+
+```typescript
+class MyModule extends Module {
+    // Enable-time dependencies: these modules must be enabled
+    // before this module's onEnable() is called.
+    static requires = ['settings', 'i18n'];
+
+    // Load-time dependencies: these modules must be enabled
+    // before this module's onLoad() is called.
+    static load_requires = ['settings'];
+}
+```
+
+`AddonManager` uses `load_requires` to ensure settings are available before loading add-on data:
+
+```typescript
+// src/addons.ts
+this.load_requires = ['settings'];
+```
+
+## should_enable flag
+
+Modules under `core` or `site` with `should_enable = true` are automatically enabled after `FrankerFaceZ` finishes initializing, without any other module needing to explicitly enable them.
+
+```typescript
+// src/addons.ts
+constructor(name?: string, parent?: GenericModule) {
+    super(name, parent);
+    this.should_enable = true;
+    // ...
+}
+```
+
+## Module paths and namespacing
+
+Every module has a **path** — a dot-separated string that uniquely identifies it in the registry. Paths are determined by the chain of names from the root to the module.
+
+```
+frankerfacez          ← root (path is undefined; registered as 'core')
+  settings            ← path: 'settings'
+  site                ← path: 'site'
+    site.chat         ← path: 'site.chat'
+    site.player       ← path: 'site.player'
+  addons              ← path: 'addons'
+addon.my-addon        ← path: 'addon.my-addon'
+  addon.my-addon.ui   ← path: 'addon.my-addon.ui'
+```
+
+Add-ons are always mounted under `addon.<id>`, where `<id>` is the add-on ID. The `Addon` class infers this from the path automatically.
+
+You can resolve any module by its absolute path:
+
+```typescript
+ffz.resolve('settings');           // SettingsManager
+ffz.resolve('site.chat');          // Chat module
+ffz.resolve('addon.my-addon');     // Root module of "my-addon"
+```
+
+From inside a module, relative paths are supported via `abs_path()`:
+
+```typescript
+// Inside a module at path 'site.chat'
+this.abs_path(':update');     // 'site.chat:update'
+this.abs_path('..');          // 'site' (parent)
+this.abs_path('..player');    // 'site.player' (sibling)
+```
+
+## Loading sub-modules from a webpack context
+
+`loadFromContext()` scans a webpack `require.context` and registers every module it finds as a child of the calling module:
+
+```typescript
+// src/main.ts — discover all modules under src/modules/
+async discoverModules() {
+    const ctx = await require.context(
+        'src/modules',
+        true,
+        /(?:^(?:\.\/?)[^/]+|index)\.[jt]sx?$/
+    );
+    const modules = this.loadFromContext(ctx, this.core_log);
+    this.core_log.info(`Loaded descriptions of ${Object.keys(modules).length} modules.`);
+}
+```
+
+Each file in the context should export its `Module` subclass as `default` or as a named export called `module`:
+
+```typescript
+// src/modules/my-feature/index.ts
+export default class MyFeature extends Module {
+    // ...
+}
+```
+
+The module's name is derived from its file path relative to the context root, with `index` stripped from the end. A file at `my-feature/index.ts` becomes the module name `my-feature`.
+
+## Error types
+
+The module system throws two error types, both exported from `src/utilities/module.ts`:
+
+```typescript
+// Thrown for invalid state transitions or missing modules
+export class ModuleError extends Error {}
+
+// Thrown when a dependency cycle is detected
+export class CyclicDependencyError extends ModuleError {
+    modules: GenericModule[]; // the chain of modules in the cycle
+}
+```

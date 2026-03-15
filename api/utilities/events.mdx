@@ -1,0 +1,329 @@
+---
+title: "Events Utility"
+description: "A lean, homegrown event emitter with priorities, TTL-based listeners, propagation control, and hierarchical namespacing."
+---
+
+
+## Overview
+
+The events utility provides `EventEmitter` — a custom event emitter with support for listener priorities, limited-lifetime listeners, and two special return-value symbols. In practice, you will interact with `HierarchicalEventEmitter`, which is what every `Module` extends.
+
+```typescript
+import { EventEmitter, Detach, StopPropagation } from 'utilities/events';
+// or, via the add-on global:
+const { EventEmitter, Detach, StopPropagation } = FrankerFaceZ.utilities.events;
+```
+
+---
+
+## Special Symbols
+
+### `Detach`
+
+```typescript
+export const Detach: unique symbol;
+```
+
+When an event listener **returns** this symbol, it is automatically removed and will not receive any further events.
+
+```typescript
+this.on('chat:receive-message', (msg) => {
+  if (this.done) return Detach;
+  // handle message...
+});
+```
+
+### `StopPropagation`
+
+```typescript
+export const StopPropagation: unique symbol;
+```
+
+When an event listener **returns** this symbol, no further listeners for that event will be called for this emission. Equivalent to calling `event.stopPropagation()` on an `FFZEvent` argument.
+
+---
+
+## EventEmitter Class
+
+```typescript
+class EventEmitter<
+  TEventMap extends EventMap = {},
+  TNamespace extends string = ''
+>
+```
+
+The `EventMap` type parameter lets you declare what events an emitter supports and what argument types they carry:
+
+```typescript
+type MyEvents = {
+  ':update': [value: string];
+  ':reset': [];
+};
+
+const emitter = new EventEmitter<MyEvents>();
+```
+
+### `on(event, fn, ctx?, priority?, prepend?)`
+
+Register a persistent event listener.
+
+<ParamField path="event" type="string" required>
+  The event name to listen for.
+</ParamField>
+
+<ParamField path="fn" type="EventListener" required>
+  The listener function. Its parameter types are inferred from `TEventMap`.
+</ParamField>
+
+<ParamField path="ctx" type="any">
+  A context (`this`) to call the function with. Also used as a handle when removing listeners via `off`.
+</ParamField>
+
+<ParamField path="priority" type="number">
+  Listener priority. Lower numbers run first. Defaults to `0`.
+</ParamField>
+
+<ParamField path="prepend" type="boolean">
+  When `true`, the listener is inserted before other listeners at the same priority. Defaults to `false`.
+</ParamField>
+
+<ResponseField name="returns" type="this">
+  Returns the emitter for chaining.
+</ResponseField>
+
+```typescript
+this.on(':update', (value) => {
+  console.log('Updated to', value);
+}, this, 10);
+```
+
+---
+
+### `once(event, fn, ctx?, priority?, prepend?)`
+
+Register a listener that fires exactly once, then auto-removes itself. Equivalent to `many(event, 1, fn, ...)`.
+
+```typescript
+this.once(':ready', () => {
+  this.initialize();
+}, this);
+```
+
+---
+
+### `many(event, ttl, fn, ctx?, priority?, prepend?)`
+
+Register a listener that fires at most `ttl` times before being removed.
+
+<ParamField path="ttl" type="number" required>
+  The number of times the listener may fire. Must be a positive, finite integer.
+</ParamField>
+
+```typescript
+// Fire at most 3 times
+this.many(':token', 3, (token) => {
+  this.handleToken(token);
+}, this);
+```
+
+---
+
+### `waitFor(event, ctx?, priority?, prepend?)`
+
+Returns a `Promise` that resolves with the arguments of the next emission of `event`.
+
+<ResponseField name="returns" type="Promise<args>">
+  Resolves with the event's argument array on the next emission.
+</ResponseField>
+
+```typescript
+const [value] = await this.waitFor(':update');
+console.log('Got update:', value);
+```
+
+<Note>
+  Internally, `waitFor` registers a listener with `ttl = 1`. The `ctx` parameter is optional but useful for debugging — it lets you identify the source of a hanging listener.
+</Note>
+
+---
+
+### `off(event?, fn?, ctx?)`
+
+Remove one or more listeners. You must supply at least one of `event`, `fn`, or `ctx`.
+
+<ParamField path="event" type="string">
+  Restrict removal to listeners on this event. Omit to match across all events.
+</ParamField>
+
+<ParamField path="fn" type="EventListener">
+  Restrict removal to this specific function reference.
+</ParamField>
+
+<ParamField path="ctx" type="any">
+  Restrict removal to listeners registered with this context.
+</ParamField>
+
+```typescript
+// Remove a specific listener
+this.off(':update', this.handleUpdate, this);
+
+// Remove every listener bound to 'this' on an event
+this.off(':update', undefined, this);
+```
+
+<Warning>
+  Calling `off` while an event is currently being emitted will throw a `concurrent modification` error. Do not call `off` from within a listener for the same event; return `Detach` instead.
+</Warning>
+
+---
+
+### `emit(event, ...args)`
+
+Emit an event, calling all registered listeners in priority order.
+
+```typescript
+this.emit(':update', 'new-value');
+```
+
+If the first argument is an `FFZEvent` instance with `propagationStopped === true`, or if any listener returns `StopPropagation`, iteration stops immediately.
+
+---
+
+### `events()`
+
+Returns an array of all event keys that have at least one active listener.
+
+```typescript
+console.log(emitter.events()); // [':update', ':reset']
+```
+
+---
+
+### `listeners(event)`
+
+Returns the full `ListenerInfo` array for the given event, including TTL and priority metadata.
+
+---
+
+### `hasListeners(event)`
+
+Returns `true` if there is at least one listener registered for `event`.
+
+---
+
+### `transferListeners(other)`
+
+Moves all listeners from this emitter to `other`, clearing this emitter in the process.
+
+---
+
+## FFZEvent
+
+`FFZEvent` is a convenience class for events where listeners may need to communicate feedback back to the emitter.
+
+```typescript
+const event = FFZEvent.makeEvent({ message: msg, badges: [] });
+this.emit(':process-message', event);
+
+if (!event.defaultPrevented) {
+  this.renderMessage(event.message);
+}
+```
+
+<ResponseField name="defaultPrevented" type="boolean">
+  Set to `true` by a listener calling `event.preventDefault()`.
+</ResponseField>
+
+<ResponseField name="propagationStopped" type="boolean">
+  Set to `true` by a listener calling `event.stopPropagation()`.
+</ResponseField>
+
+---
+
+## FFZWaitableEvent
+
+`FFZWaitableEvent` extends `FFZEvent` with async support. Listeners can return a `Promise` or call `event.waitFor(promise)`, and the emitter can await all of them with `event._wait()`.
+
+```typescript
+const event = FFZWaitableEvent.makeEvent<{ url: string }, Response>({ url });
+this.emit(':fetch', event);
+const results = await event._wait();
+```
+
+---
+
+## HierarchicalEventEmitter
+
+`HierarchicalEventEmitter` wraps `EventEmitter` so that a tree of modules can share a single listener pool. Every `Module` is a `HierarchicalEventEmitter`.
+
+Each emitter has a **path** — a dot-separated string like `chat.emotes`. When emitting or subscribing to events, paths are resolved automatically:
+
+| Syntax | Meaning |
+|---|---|
+| `:my-event` | Resolved relative to this emitter's path: `chat.emotes:my-event` |
+| `..` | Move up one level in the hierarchy |
+| `..sibling:event` | Sibling emitter's event |
+
+```typescript
+// Inside a module at path 'chat.emotes'
+this.emit(':update-default-sets');
+// → emits 'chat.emotes:update-default-sets'
+
+this.on('..:update-line-tokens', handler);
+// → listens on 'chat:update-line-tokens'
+```
+
+### `abs_path(path)`
+
+Convert a relative path to its absolute equivalent given this emitter's current location in the hierarchy.
+
+<ParamField path="path" type="string" required>
+  A relative or absolute event path string.
+</ParamField>
+
+<ResponseField name="returns" type="string">
+  The fully-qualified absolute path.
+</ResponseField>
+
+---
+
+## String Prototype Extensions
+
+This module also extends the global `String` prototype with two helper methods:
+
+### `String.prototype.toSnakeCase()`
+
+Converts a string to `snake_case`. Normalizes Unicode, trims whitespace, inserts underscores between camelCase transitions, and lowercases the result.
+
+```typescript
+'MyAddonModule'.toSnakeCase(); // → 'my_addon_module'
+'Chat Emotes'.toSnakeCase();   // → 'chat_emotes'
+```
+
+### `String.prototype.toSlug(separator?)`
+
+Converts a string to a URL-safe slug. Strips accents, removes non-alphanumeric characters, and joins words with the given separator (default `'-'`).
+
+```typescript
+'Hello World!'.toSlug();       // → 'hello-world'
+'Hello World!'.toSlug('_');    // → 'hello_world'
+```
+
+---
+
+## Type Reference
+
+```typescript
+export type ListenerReturnType =
+  | void
+  | typeof Detach
+  | typeof StopPropagation
+  | Promise<void>;
+
+export type EventListener<TArgs extends any[] = any[]> =
+  (...args: TArgs) => ListenerReturnType;
+
+export interface EventMap {
+  [event: string]: any[];
+}
+```
